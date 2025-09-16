@@ -12,6 +12,7 @@ from flcore.clients.clientbase import load_item, save_item
 from threading import Thread
 from collections import defaultdict
 from torch.utils.data import DataLoader
+import wandb
 
 
 class FedKTL(Server):
@@ -158,14 +159,17 @@ class FedKTL(Server):
 
 
     def train(self):
-        for i in range(self.global_rounds+1):
+        # 先评估初始性能
+        print(f"\n-------------Initial Evaluation-------------")
+        print("\nEvaluate initial heterogeneous models performance")
+        self.evaluate()
+        print("\nStarting training...")
+
+        for i in range(1, self.global_rounds+1):
             s_t = time.time()
             self.selected_clients = self.select_clients()
 
-            if i%self.eval_gap == 0:
-                print(f"\n-------------Round number: {i}-------------")
-                print("\nEvaluate heterogeneous models")
-                self.evaluate()
+            print(f"\n-------------Round number: {i}-------------")
 
             for client in self.selected_clients:
                 client.train()
@@ -180,6 +184,11 @@ class FedKTL(Server):
             self.align()
             self.generate_images(i)
 
+            # 训练后评估
+            if i%self.eval_gap == 0:
+                print("\nEvaluate heterogeneous models after training")
+                self.evaluate()
+
             self.Budget.append(time.time() - s_t)
             print('-'*50, self.Budget[-1])
 
@@ -189,6 +198,16 @@ class FedKTL(Server):
         print("\nBest accuracy.")
         print(max(self.rs_test_acc))
         print(sum(self.Budget[1:])/len(self.Budget[1:]))
+
+        # Log final metrics to wandb
+        if self.use_wandb:
+            wandb.log({
+                "final/best_accuracy": max(self.rs_test_acc),
+                "final/best_auc": max(self.rs_test_auc) if self.rs_test_auc else 0,
+                "final/avg_time_per_round": sum(self.Budget[1:])/len(self.Budget[1:]) if len(self.Budget) > 1 else 0,
+                "final/total_rounds": len(self.rs_test_acc)
+            })
+            wandb.finish()
 
         self.save_results()
 
@@ -298,19 +317,31 @@ class FedKTL(Server):
         latent_centroids = load_item(self.role, 'latent_centroids', self.save_folder_name)
         latents_loader = DataLoader(latent_centroids, self.gen_batch_size, drop_last=False, shuffle=False)
         PIL_transform = transforms.Compose([transforms.PILToTensor()])
-        for latents in latents_loader:
-            PIL_images = pipe(
-                latents=latents, 
-                prompt_embeds=torch.tile(self.pipe_prompt_embeds, (latents.shape[0], 1, 1)), 
-                negative_prompt_embeds=torch.tile(self.pipe_negative_prompt_embeds, (latents.shape[0], 1, 1)), 
-                num_inference_steps=self.pipe_num_inference_steps, 
-                num_images_per_prompt=self.pipe_num_images_per_prompt
-            ).images
-            raw_images = torch.stack([PIL_transform(img) for img in PIL_images]).clamp(0, 255) / 255
-            images = clientprocess(raw_images)
-            data = [(xx, yy.view(-1)) for xx, yy in zip(images, latents)]
-            data_generated.extend(data)
 
+        # 为每个类别生成多个样本以增加多样性
+        num_augmentations = 3  # 每个类别生成3批数据
+
+        for aug_idx in range(num_augmentations):
+            for latents in latents_loader:
+                # 添加少量噪声以增加生成样本的多样性
+                if aug_idx > 0:
+                    noise = torch.randn_like(latents) * 0.05  # 小噪声
+                    latents = latents + noise
+
+                PIL_images = pipe(
+                    latents=latents,
+                    prompt_embeds=torch.tile(self.pipe_prompt_embeds, (latents.shape[0], 1, 1)),
+                    negative_prompt_embeds=torch.tile(self.pipe_negative_prompt_embeds, (latents.shape[0], 1, 1)),
+                    num_inference_steps=self.pipe_num_inference_steps,
+                    num_images_per_prompt=self.pipe_num_images_per_prompt
+                ).images
+
+                raw_images = torch.stack([PIL_transform(img) for img in PIL_images]).clamp(0, 255) / 255
+                images = clientprocess(raw_images)
+                data = [(xx, yy.view(-1)) for xx, yy in zip(images, latents)]
+                data_generated.extend(data)
+
+        print(f"Generated {len(data_generated)} synthetic samples for knowledge transfer")
         save_item(data_generated, self.role, 'data_generated', self.save_folder_name)
 
 

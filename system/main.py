@@ -197,6 +197,9 @@ if __name__ == "__main__":
     parser.add_argument('-mu', "--mu", type=float, default=50.0)
     parser.add_argument('-gbs', "--gen_batch_size", type=int, default=4,
                         help="Not related to the performance. A small value saves GPU memory.")
+    # wandb
+    parser.add_argument('-wb', "--use_wandb", type=bool, default=False,
+                        help="Use wandb for logging metrics")
 
 
     args = parser.parse_args()

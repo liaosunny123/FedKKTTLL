@@ -12,6 +12,7 @@ from flcore.clients.clientbase import load_item, save_item
 from threading import Thread
 from collections import defaultdict
 from torch.utils.data import DataLoader
+import wandb
 
 import PIL.Image
 import sys
@@ -98,14 +99,17 @@ class FedKTL(Server):
 
 
     def train(self):
-        for i in range(self.global_rounds+1):
+        # 先评估初始性能
+        print(f"\n-------------Initial Evaluation-------------")
+        print("\nEvaluate initial heterogeneous models performance")
+        self.evaluate()
+        print("\nStarting training...")
+
+        for i in range(1, self.global_rounds+1):
             s_t = time.time()
             self.selected_clients = self.select_clients()
 
-            if i%self.eval_gap == 0:
-                print(f"\n-------------Round number: {i}-------------")
-                print("\nEvaluate heterogeneous models")
-                self.evaluate()
+            print(f"\n-------------Round number: {i}-------------")
 
             for client in self.selected_clients:
                 client.train()
@@ -120,6 +124,11 @@ class FedKTL(Server):
             self.align()
             self.generate_images(i)
 
+            # 训练后评估
+            if i%self.eval_gap == 0:
+                print("\nEvaluate heterogeneous models after training")
+                self.evaluate()
+
             self.Budget.append(time.time() - s_t)
             print('-'*50, self.Budget[-1])
 
@@ -129,6 +138,16 @@ class FedKTL(Server):
         print("\nBest accuracy.")
         print(max(self.rs_test_acc))
         print(sum(self.Budget[1:])/len(self.Budget[1:]))
+
+        # Log final metrics to wandb
+        if self.use_wandb:
+            wandb.log({
+                "final/best_accuracy": max(self.rs_test_acc),
+                "final/best_auc": max(self.rs_test_auc) if self.rs_test_auc else 0,
+                "final/avg_time_per_round": sum(self.Budget[1:])/len(self.Budget[1:]) if len(self.Budget) > 1 else 0,
+                "final/total_rounds": len(self.rs_test_acc)
+            })
+            wandb.finish()
 
         self.save_results()
 

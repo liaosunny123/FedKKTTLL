@@ -38,6 +38,9 @@ SERVER_EPOCHS=100        # 服务器训练轮次
 LAMBDA=0.01              # 正则化系数
 MU=100                   # 损失权重系数
 
+# 使用 wandb
+USE_WANDB=True
+
 # ========================================
 # 运行命令
 # ========================================
@@ -71,4 +74,5 @@ HF_ENDPOINT=https://hf-mirror.com python -u main.py \
   -se $SERVER_EPOCHS \
   -lam $LAMBDA \
   -mu $MU \
+  -wb $USE_WANDB \
   -GPath $GENERATOR_PATH

@@ -8,6 +8,7 @@ import random
 import shutil
 from utils.data_utils import read_client_data
 from flcore.clients.clientbase import load_item, save_item
+import wandb
 
 
 class Server(object):
@@ -58,6 +59,28 @@ class Server(object):
         self.client_drop_rate = args.client_drop_rate
         self.train_slow_rate = args.train_slow_rate
         self.send_slow_rate = args.send_slow_rate
+
+        # Initialize wandb for server
+        self.use_wandb = getattr(args, 'use_wandb', False)
+        if self.use_wandb:
+            wandb.init(
+                project="fedktl",
+                entity="epicmo",
+                name=f"{self.algorithm}_server_run_{times}",
+                config={
+                    "algorithm": self.algorithm,
+                    "dataset": self.dataset,
+                    "num_clients": self.num_clients,
+                    "num_classes": self.num_classes,
+                    "global_rounds": self.global_rounds,
+                    "local_epochs": self.local_epochs,
+                    "batch_size": self.batch_size,
+                    "learning_rate": self.learning_rate,
+                    "join_ratio": self.join_ratio,
+                    "eval_gap": self.eval_gap
+                },
+                reinit=True
+            )
 
 
     def set_clients(self, clientObj):
@@ -170,9 +193,18 @@ class Server(object):
         for c in self.clients:
             ct, ns, auc = c.test_metrics()
             tot_correct.append(ct*1.0)
-            print(f'Client {c.id}: Acc: {ct*1.0/ns}, AUC: {auc}')
+            acc = ct*1.0/ns
+            print(f'Client {c.id}: Acc: {acc}, AUC: {auc}')
             tot_auc.append(auc*ns)
             num_samples.append(ns)
+
+            # Log individual client metrics to wandb
+            if self.use_wandb:
+                wandb.log({
+                    f"client_{c.id}/accuracy": acc,
+                    f"client_{c.id}/auc": auc,
+                    f"client_{c.id}/samples": ns
+                })
 
         ids = [c.id for c in self.clients]
 
@@ -200,12 +232,26 @@ class Server(object):
         # train_loss = sum(stats_train[2])*1.0 / sum(stats_train[1])
         accs = [a / n for a, n in zip(stats[2], stats[1])]
         aucs = [a / n for a, n in zip(stats[3], stats[1])]
-        
+
+        # Log global metrics to wandb
+        if self.use_wandb:
+            current_round = len(self.rs_test_acc)
+            wandb.log({
+                "global/round": current_round,
+                "global/test_accuracy": test_acc,
+                "global/test_auc": test_auc,
+                "global/num_selected_clients": self.current_num_join_clients,
+                "global/mean_client_accuracy": np.mean(accs),
+                "global/std_client_accuracy": np.std(accs),
+                "global/mean_client_auc": np.mean(aucs),
+                "global/std_client_auc": np.std(aucs)
+            })
+
         if acc == None:
             self.rs_test_acc.append(test_acc)
         else:
             acc.append(test_acc)
-        
+
         # if loss == None:
         #     self.rs_train_loss.append(train_loss)
         # else:

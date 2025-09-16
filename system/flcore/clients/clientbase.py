@@ -9,6 +9,7 @@ from sklearn.preprocessing import label_binarize
 from sklearn import metrics
 from utils.data_utils import read_client_data
 from flcore.trainmodel.models import BaseHeadSplit
+import wandb
 
 
 class Client(object):
@@ -42,6 +43,27 @@ class Client(object):
         self.send_time_cost = {'num_rounds': 0, 'total_cost': 0.0}
 
         self.loss = nn.CrossEntropyLoss()
+
+        # Initialize wandb for this client
+        self.use_wandb = getattr(args, 'use_wandb', False)
+        if self.use_wandb:
+            wandb.init(
+                project="fedktl",
+                entity="epicmo",
+                name=f"{self.algorithm}_client_{self.id}",
+                config={
+                    "algorithm": self.algorithm,
+                    "dataset": self.dataset,
+                    "client_id": self.id,
+                    "num_classes": self.num_classes,
+                    "batch_size": self.batch_size,
+                    "learning_rate": self.learning_rate,
+                    "local_epochs": self.local_epochs,
+                    "train_samples": self.train_samples,
+                    "test_samples": self.test_samples
+                },
+                reinit=True
+            )
 
 
     def load_train_data(self, batch_size=None):
@@ -101,7 +123,15 @@ class Client(object):
         y_true = np.concatenate(y_true, axis=0)
 
         auc = metrics.roc_auc_score(y_true, y_prob, average='micro')
-        
+
+        # Log metrics to wandb
+        if self.use_wandb:
+            wandb.log({
+                f"client_{self.id}/test_accuracy": test_acc / test_num,
+                f"client_{self.id}/test_auc": auc,
+                f"client_{self.id}/test_samples": test_num
+            })
+
         return test_acc, test_num, auc
 
     def train_metrics(self):
@@ -123,6 +153,13 @@ class Client(object):
                 loss = self.loss(output, y)
                 train_num += y.shape[0]
                 losses += loss.item() * y.shape[0]
+
+        # Log training metrics to wandb
+        if self.use_wandb:
+            wandb.log({
+                f"client_{self.id}/train_loss": losses / train_num if train_num > 0 else 0,
+                f"client_{self.id}/train_samples": train_num
+            })
 
         return losses, train_num
 

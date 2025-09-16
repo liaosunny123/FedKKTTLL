@@ -9,6 +9,7 @@ from collections import defaultdict
 from sklearn.preprocessing import label_binarize
 from sklearn import metrics
 from torch.utils.data import DataLoader
+import wandb
 
 
 class clientKTL(Client):
@@ -21,9 +22,14 @@ class clientKTL(Client):
         self.m = 0.5
         self.s = 64
 
-        self.classes_ids_tensor = torch.tensor(list(range(self.num_classes)), 
+        self.classes_ids_tensor = torch.tensor(list(range(self.num_classes)),
                                                dtype=torch.int64, device=self.device)
         self.MSEloss = nn.MSELoss()
+
+        # 添加学习率衰减支持
+        self.learning_rate_decay = getattr(args, 'learning_rate_decay', False)
+        self.learning_rate_decay_gamma = getattr(args, 'learning_rate_decay_gamma', 0.99)
+        self.current_round = 0
 
 
     def train(self):
@@ -38,18 +44,28 @@ class clientKTL(Client):
             gen_iter = iter(gen_loader)
         proj_fc = load_item('Server', 'proj_fc', self.save_folder_name)
 
-        optimizer = torch.optim.SGD(model.parameters(), lr=self.learning_rate)
-        opt_proj_fc = torch.optim.SGD(proj_fc.parameters(), lr=self.learning_rate)
+        # 更新当前轮次
+        self.current_round += 1
+
+        # 应用学习率衰减
+        current_lr = self.learning_rate
+        if self.learning_rate_decay:
+            current_lr = self.learning_rate * (self.learning_rate_decay_gamma ** self.current_round)
+
+        optimizer = torch.optim.SGD(model.parameters(), lr=current_lr)
+        opt_proj_fc = torch.optim.SGD(proj_fc.parameters(), lr=current_lr)
         # model.to(self.device)
         model.train()
-        
+
         start_time = time.time()
 
         max_local_epochs = self.local_epochs
         if self.train_slow:
             max_local_epochs = np.random.randint(1, max_local_epochs // 2)
 
+        epoch_losses = []
         for step in range(max_local_epochs):
+            batch_losses = []
             for i, (x, y) in enumerate(trainloader):
                 if type(x) == type([]):
                     x[0] = x[0].to(self.device)
@@ -69,6 +85,7 @@ class clientKTL(Client):
                 cosine = one_hot * cosine_new + (1 - one_hot) * cosine
                 cosine = cosine * self.s
                 loss = self.loss(cosine, y)
+                batch_losses.append(loss.item())
 
                 # knowledge transfer
                 if data_generated is not None:
@@ -97,10 +114,35 @@ class clientKTL(Client):
                 optimizer.step()
                 opt_proj_fc.step()
 
+            # Calculate average loss for this epoch
+            if batch_losses:
+                epoch_loss = sum(batch_losses) / len(batch_losses)
+                epoch_losses.append(epoch_loss)
+
+                # Log epoch metrics to wandb
+                if self.use_wandb:
+                    wandb.log({
+                        f"client_{self.id}/epoch": step,
+                        f"client_{self.id}/epoch_loss": epoch_loss,
+                        f"client_{self.id}/learning_rate": current_lr,
+                        f"client_{self.id}/round": self.current_round,
+                    })
+
         save_item(model, self.role, 'model', self.save_folder_name)
 
+        train_time = time.time() - start_time
         self.train_time_cost['num_rounds'] += 1
-        self.train_time_cost['total_cost'] += time.time() - start_time
+        self.train_time_cost['total_cost'] += train_time
+
+        # Log training summary to wandb
+        if self.use_wandb:
+            avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
+            wandb.log({
+                f"client_{self.id}/train_time": train_time,
+                f"client_{self.id}/total_epochs": max_local_epochs,
+                f"client_{self.id}/avg_train_loss": avg_loss,
+                f"client_{self.id}/train_round": self.train_time_cost['num_rounds']
+            })
 
     def test_metrics(self):
         testloaderfull = self.load_test_data()
@@ -141,7 +183,15 @@ class clientKTL(Client):
         y_true = np.concatenate(y_true, axis=0)
 
         auc = metrics.roc_auc_score(y_true, y_prob, average='micro')
-        
+
+        # Log test metrics to wandb
+        if self.use_wandb:
+            wandb.log({
+                f"client_{self.id}/test_accuracy": test_acc / test_num if test_num > 0 else 0,
+                f"client_{self.id}/test_auc": auc,
+                f"client_{self.id}/test_samples": test_num
+            })
+
         return test_acc, test_num, auc
 
     def collect_protos(self):

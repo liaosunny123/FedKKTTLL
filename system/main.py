@@ -10,6 +10,7 @@ import logging
 from flcore.servers.serverktl_stylegan_xl import FedKTL as FedKTL_stylegan_xl
 from flcore.servers.serverktl_stylegan_3 import FedKTL as FedKTL_stylegan_3
 from flcore.servers.serverktl_stable_diffusion import FedKTL as FedKTL_stable_diffusion
+from flcore.servers.serverfedavg import FedAvg
 
 from utils.result_utils import average_data
 from utils.mem_utils import MemReporter
@@ -107,8 +108,11 @@ def run(args):
         for i, model in enumerate(args.models):
             print(f"客户端 {i}: {model}")
 
-        # select algorithm            
-        if args.algorithm == "FedKTL-stylegan-xl":
+        # select algorithm
+        if args.algorithm == "FedAvg":
+            server = FedAvg(args, i)
+
+        elif args.algorithm == "FedKTL-stylegan-xl":
             server = FedKTL_stylegan_xl(args, i)
 
         elif args.algorithm == "FedKTL-stylegan-3":
@@ -116,9 +120,9 @@ def run(args):
 
         elif args.algorithm == "FedKTL-stable-diffusion":
             server = FedKTL_stable_diffusion(args, i)
-            
+
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"Algorithm {args.algorithm} not implemented")
 
         server.train()
 

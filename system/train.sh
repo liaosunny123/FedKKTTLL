@@ -26,11 +26,17 @@ LOCAL_BATCH_SIZE=10      # 本地批次大小
 LOCAL_EPOCHS=1           # 本地训练轮次
 
 # 算法配置
-#ALGORITHM="FedKTL-stable-diffusion"  # 联邦学习算法
-#GENERATOR_PATH="runwayml/stable-diffusion-v1-5"  # Stable Diffusion模型路径
+# 可选算法：FedAvg, FedKTL-stylegan-3, FedKTL-stylegan-xl, FedKTL-stable-diffusion
+ALGORITHM="FedAvg"  # 联邦学习算法
 
-ALGORITHM="FedKTL-stylegan-3"  # 联邦学习算法
-GENERATOR_PATH="stylegan/stylegan-3-models/stylegan3-t-afhqv2-512x512.pkl"  # Stable Diffusion模型路径
+# 生成器配置（仅FedKTL算法需要）
+# FedKTL-stable-diffusion:
+#GENERATOR_PATH="runwayml/stable-diffusion-v1-5"
+# FedKTL-stylegan-3:
+#GENERATOR_PATH="stylegan/stylegan-3-models/stylegan3-t-afhqv2-512x512.pkl"
+# FedKTL-stylegan-xl:
+#GENERATOR_PATH="stylegan/stylegan-xl-models/stylegan_xl-afhqv2-512x512.pkl"
+GENERATOR_PATH=""  # FedAvg不需要生成器
 
 # 服务器端参数
 SERVER_LR=0.1            # 服务器学习率
@@ -41,10 +47,12 @@ SERVER_EPOCHS=100        # 服务器训练轮次
 LAMBDA=0.01              # 正则化系数
 MU=100                   # 损失权重系数
 
-# ETF Classifier配置
+# ETF Classifier配置 (仅FedKTL算法使用)
 USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)
 
 # 全局模型配置
+# FedAvg: 全局模型用于参数聚合
+# FedKTL: 全局模型基于prototype训练
 USE_GLOBAL_MODEL=1       # 是否使用全局模型 (1=使用, 0=不使用，仅在同构模型下有效)
 
 # 使用 wandb
@@ -87,28 +95,40 @@ export TORCH_CUDA_ARCH_LIST="8.9"
 echo "CUDA_HOME: $CUDA_HOME"
 echo "TORCH_CUDA_ARCH_LIST: $TORCH_CUDA_ARCH_LIST"
 
-TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" HF_ENDPOINT=https://hf-mirror.com python -u main.py \
-  -t $TIMES \
-  -ab $AUTO_BREAK \
-  -lr $LOCAL_LR \
-  -jr $JOIN_RATIO \
-  -lbs $LOCAL_BATCH_SIZE \
-  -ls $LOCAL_EPOCHS \
-  -nc $NUM_CLIENTS \
-  -nb $NUM_CLASSES \
-  -data $DATASET \
-  -m $MODEL_FAMILY \
-  -hm $IS_HOMOGENEITY_MODEL \
-  -fd $FEATURE_DIM \
-  -did $DEVICE_ID \
-  -algo $ALGORITHM \
-  -slr $SERVER_LR \
-  -sbs $SERVER_BATCH_SIZE \
-  -se $SERVER_EPOCHS \
-  -lam $LAMBDA \
-  -mu $MU \
-  -wb $USE_WANDB \
-  -etf $USE_ETF \
-  -gm $USE_GLOBAL_MODEL \
-  -GPath $GENERATOR_PATH \
-  ${DISTRIBUTION_CONFIG:+-dc "$DISTRIBUTION_CONFIG"}
+# 构建运行命令
+CMD="TORCH_CUDA_ARCH_LIST='8.0;8.6;8.9' HF_ENDPOINT=https://hf-mirror.com python -u main.py"
+CMD="$CMD -t $TIMES"
+CMD="$CMD -ab $AUTO_BREAK"
+CMD="$CMD -lr $LOCAL_LR"
+CMD="$CMD -jr $JOIN_RATIO"
+CMD="$CMD -lbs $LOCAL_BATCH_SIZE"
+CMD="$CMD -ls $LOCAL_EPOCHS"
+CMD="$CMD -nc $NUM_CLIENTS"
+CMD="$CMD -nb $NUM_CLASSES"
+CMD="$CMD -data $DATASET"
+CMD="$CMD -m $MODEL_FAMILY"
+CMD="$CMD -hm $IS_HOMOGENEITY_MODEL"
+CMD="$CMD -fd $FEATURE_DIM"
+CMD="$CMD -did $DEVICE_ID"
+CMD="$CMD -algo $ALGORITHM"
+CMD="$CMD -slr $SERVER_LR"
+CMD="$CMD -sbs $SERVER_BATCH_SIZE"
+CMD="$CMD -se $SERVER_EPOCHS"
+CMD="$CMD -lam $LAMBDA"
+CMD="$CMD -mu $MU"
+CMD="$CMD -wb $USE_WANDB"
+CMD="$CMD -etf $USE_ETF"
+CMD="$CMD -gm $USE_GLOBAL_MODEL"
+
+# 仅在使用FedKTL算法时添加生成器路径
+if [[ "$ALGORITHM" == "FedKTL-"* ]]; then
+    CMD="$CMD -GPath $GENERATOR_PATH"
+fi
+
+# 添加数据分布配置（如果存在）
+if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
+    CMD="$CMD -dc $DISTRIBUTION_CONFIG"
+fi
+
+# 执行命令
+eval $CMD

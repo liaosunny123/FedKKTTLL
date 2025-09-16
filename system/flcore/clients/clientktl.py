@@ -43,6 +43,8 @@ class clientKTL(Client):
         if data_generated is not None:
             gen_loader = DataLoader(data_generated, self.batch_size, drop_last=False, shuffle=True)
             gen_iter = iter(gen_loader)
+        else:
+            print(f"Client {self.id}: No generated data available")
         proj_fc = load_item('Server', 'proj_fc', self.save_folder_name)
 
         # 更新当前轮次
@@ -65,6 +67,16 @@ class clientKTL(Client):
             max_local_epochs = np.random.randint(1, max_local_epochs // 2)
 
         epoch_losses = []
+        # Debug: Check data distribution for Client 0
+        if self.id == 0 and self.current_round == 1:
+            label_counts = defaultdict(int)
+            for _, y in trainloader:
+                if isinstance(y, torch.Tensor):
+                    for label in y.cpu().numpy():
+                        label_counts[label] += 1
+            print(f"Client {self.id} label distribution: {dict(label_counts)}")
+            print(f"Client {self.id} total samples: {sum(label_counts.values())}")
+
         for step in range(max_local_epochs):
             batch_losses = []
             for i, (x, y) in enumerate(trainloader):
@@ -79,9 +91,11 @@ class clientKTL(Client):
                 proj = F.normalize(proj)
                 cosine = F.linear(proj, ETF)
 
-                # ArcFace loss
+                # ArcFace loss with clipping to prevent NaN
                 one_hot = F.one_hot(y, self.num_classes).to(self.device)
-                arccos = torch.acos(cosine)
+                # Clip cosine values to prevent NaN in arccos
+                cosine_clipped = torch.clamp(cosine, -1.0 + 1e-7, 1.0 - 1e-7)
+                arccos = torch.acos(cosine_clipped)
                 cosine_new = torch.cos(arccos + self.m)
                 cosine = one_hot * cosine_new + (1 - one_hot) * cosine
                 cosine = cosine * self.s
@@ -110,6 +124,17 @@ class clientKTL(Client):
                 optimizer.zero_grad()
                 opt_proj_fc.zero_grad()
                 loss.backward()
+
+                # Debug gradient norms
+                if self.id == 0 and i == 0 and step == 0:
+                    total_norm = 0
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                    total_norm = total_norm ** (1. / 2.)
+                    print(f"Client {self.id} gradient norm before clipping: {total_norm:.4f}")
+
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 100)
                 torch.nn.utils.clip_grad_norm_(proj_fc.parameters(), 100)
                 optimizer.step()
@@ -123,12 +148,14 @@ class clientKTL(Client):
                 # Log epoch metrics to wandb
                 if self.use_wandb:
                     self.train_step_count += 1
+                    global_step = (self.current_round - 1) * max_local_epochs + step
                     wandb.log({
-                        f"Client_{self.id}/step": self.train_step_count,
+                        f"Client_{self.id}/step": global_step,
                         f"Client_{self.id}/epoch_loss": epoch_loss,
                         f"Client_{self.id}/learning_rate": current_lr,
                         f"Client_{self.id}/round": self.current_round,
-                    })
+                        f"Client_{self.id}/local_epoch": step,
+                    }, step=global_step)
 
         save_item(model, self.role, 'model', self.save_folder_name)
 
@@ -139,12 +166,14 @@ class clientKTL(Client):
         # Log training summary to wandb
         if self.use_wandb:
             avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
+            global_step = self.current_round * max_local_epochs
             wandb.log({
                 f"Client_{self.id}/train_time": train_time,
                 f"Client_{self.id}/total_epochs": max_local_epochs,
                 f"Client_{self.id}/avg_train_loss": avg_loss,
-                f"Client_{self.id}/global_round": self.current_round
-            })
+                f"Client_{self.id}/global_round": self.current_round,
+                f"Client_{self.id}/num_train_samples": len(trainloader.dataset) if hasattr(trainloader, 'dataset') else 0
+            }, step=global_step)
 
     def test_metrics(self):
         testloaderfull = self.load_test_data()

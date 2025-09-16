@@ -94,9 +94,18 @@ def run(args):
 
         else:
             raise NotImplementedError
+        
+        # 如果启用同构模型，所有客户端使用第一个模型
+        if args.is_homogeneity_model == 1:
+            first_model = args.models[0]
+            args.models = [first_model] * len(args.models)
+            print(f"使用同构模型: {first_model}")
+            print(f"所有 {len(args.models)} 个客户端将使用相同模型")
+        else:
+            print(f"使用异构模型族: {args.model_family}")
             
-        for model in args.models:
-            print(model)
+        for i, model in enumerate(args.models):
+            print(f"客户端 {i}: {model}")
 
         # select algorithm            
         if args.algorithm == "FedKTL-stylegan-xl":
@@ -139,6 +148,8 @@ if __name__ == "__main__":
     parser.add_argument('-data', "--dataset", type=str, default="MNIST")
     parser.add_argument('-nb', "--num_classes", type=int, default=10)
     parser.add_argument('-m', "--model_family", type=str, default="cnn")
+    parser.add_argument('-hm', "--is_homogeneity_model", type=int, default=0,
+                        help="Use homogeneous model for all clients (1=True, 0=False)")
     parser.add_argument('-lbs', "--batch_size", type=int, default=10)
     parser.add_argument('-lr', "--local_learning_rate", type=float, default=0.005,
                         help="Local learning rate")
@@ -216,6 +227,7 @@ if __name__ == "__main__":
     print("Dataset: {}".format(args.dataset))
     print("Number of classes: {}".format(args.num_classes))
     print("Backbone: {}".format(args.model_family))
+    print("Homogeneous model: {}".format("Yes" if args.is_homogeneity_model else "No"))
     print("Using device: {}".format(args.device))
     print("Auto break: {}".format(args.auto_break))
     if not args.auto_break:

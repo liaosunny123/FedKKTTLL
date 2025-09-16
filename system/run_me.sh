@@ -1,0 +1,1 @@
+nohup python -u main.py -t 3 -ab 1 -lr 0.01 -jr 1 -lbs 10 -ls 1 -nc 20 -nb 10 -data Cifar10 -m HtM10 -fd 512 -did 1 -algo FedKTL-stable-diffusion -slr 0.1 -sbs 100 -se 100 -lam 0.01 -mu 100 -GPath runwayml/stable-diffusion-v1-5 > total-Cifar10-HtM10-fd=512-FedKTL-stable-diffusion.out 2>&1 &

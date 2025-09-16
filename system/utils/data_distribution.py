@@ -20,6 +20,7 @@ class DataDistributionManager:
             config_path: Path to JSON configuration file
         """
         self.config = {}
+        self.printed_distributions = set()  # 记录已打印的客户端
         if config_path and os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 self.config = json.load(f)
@@ -27,7 +28,7 @@ class DataDistributionManager:
         else:
             print("No distribution config found, using original data")
 
-    def filter_client_data(self, client_id, train_data, num_classes):
+    def filter_client_data(self, client_id, train_data, num_classes, is_train=True):
         """
         Filter training data for a client based on configuration.
 
@@ -75,8 +76,10 @@ class DataDistributionManager:
             if len(filtered_data) > max_samples:
                 filtered_data = random.sample(filtered_data, max_samples)
 
-        # Print distribution info
-        self._print_distribution(client_id, filtered_data, num_classes)
+        # Print distribution info only once per client
+        if is_train and client_id not in self.printed_distributions:
+            self._print_distribution(client_id, filtered_data, num_classes, is_train)
+            self.printed_distributions.add(client_id)
 
         return filtered_data
 
@@ -145,10 +148,11 @@ class DataDistributionManager:
         random.shuffle(filtered_data)
         return filtered_data
 
-    def _print_distribution(self, client_id, data, num_classes):
+    def _print_distribution(self, client_id, data, num_classes, is_train=True):
         """Print the distribution of filtered data."""
+        data_type = "training" if is_train else "test"
         if not data:
-            print(f"Client {client_id}: No data!")
+            print(f"Client {client_id}: No {data_type} data!")
             return
 
         # Count samples per class
@@ -156,7 +160,7 @@ class DataDistributionManager:
         for _, y in data:
             class_counts[int(y.item())] += 1
 
-        print(f"\nClient {client_id} data distribution:")
+        print(f"\nClient {client_id} {data_type} data distribution:")
         print(f"  Total samples: {len(data)}")
         print(f"  Classes present: {sorted(class_counts.keys())}")
 

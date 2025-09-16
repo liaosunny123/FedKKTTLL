@@ -103,16 +103,24 @@ class Server(object):
 
 
     def set_clients(self, clientObj):
+        print("\n" + "="*60)
+        print("Initializing client data distributions...")
+        print("="*60)
+
         for i, train_slow, send_slow in zip(range(self.num_clients), self.train_slow_clients, self.send_slow_clients):
             train_data = read_client_data(self.dataset, i, is_train=True)
             test_data = read_client_data(self.dataset, i, is_train=False)
-            client = clientObj(self.args, 
-                            id=i, 
-                            train_samples=len(train_data), 
-                            test_samples=len(test_data), 
-                            train_slow=train_slow, 
+            client = clientObj(self.args,
+                            id=i,
+                            train_samples=len(train_data),
+                            test_samples=len(test_data),
+                            train_slow=train_slow,
                             send_slow=send_slow)
             self.clients.append(client)
+
+        print("="*60)
+        print("Client data distributions initialized.")
+        print("="*60 + "\n")
 
     # random select slow clients
     def select_slow_clients(self, slow_rate):

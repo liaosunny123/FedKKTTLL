@@ -56,21 +56,36 @@ class Client(object):
     def load_train_data(self, batch_size=None):
         if batch_size == None:
             batch_size = self.batch_size
-        train_data = read_client_data(self.dataset, self.id, is_train=True)
 
-        # Apply distribution configuration if available
-        if self.distribution_manager:
-            train_data = self.distribution_manager.filter_client_data(
-                self.id, train_data, self.num_classes
-            )
+        # Cache train data to avoid re-filtering
+        if not hasattr(self, '_cached_train_data'):
+            train_data = read_client_data(self.dataset, self.id, is_train=True)
 
-        return DataLoader(train_data, batch_size, drop_last=True, shuffle=True)
+            # Apply distribution configuration if available
+            if self.distribution_manager and self.distribution_manager.config:
+                train_data = self.distribution_manager.filter_client_data(
+                    self.id, train_data, self.num_classes, is_train=True
+                )
+            self._cached_train_data = train_data
+
+        return DataLoader(self._cached_train_data, batch_size, drop_last=True, shuffle=True)
 
     def load_test_data(self, batch_size=None):
         if batch_size == None:
             batch_size = self.batch_size
-        test_data = read_client_data(self.dataset, self.id, is_train=False)
-        return DataLoader(test_data, batch_size, drop_last=False, shuffle=False)
+
+        # Cache test data to avoid re-filtering
+        if not hasattr(self, '_cached_test_data'):
+            test_data = read_client_data(self.dataset, self.id, is_train=False)
+
+            # Apply same distribution configuration to test data
+            if self.distribution_manager and self.distribution_manager.config:
+                test_data = self.distribution_manager.filter_client_data(
+                    self.id, test_data, self.num_classes, is_train=False
+                )
+            self._cached_test_data = test_data
+
+        return DataLoader(self._cached_test_data, batch_size, drop_last=False, shuffle=False)
 
     def clone_model(self, model, target):
         for param, target_param in zip(model.parameters(), target.parameters()):

@@ -44,6 +44,9 @@ MU=100                   # 损失权重系数
 # ETF Classifier配置
 USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)
 
+# 全局模型配置
+USE_GLOBAL_MODEL=1       # 是否使用全局模型 (1=使用, 0=不使用，仅在同构模型下有效)
+
 # 使用 wandb
 USE_WANDB=True
 
@@ -65,6 +68,7 @@ echo "同构模型: $IS_HOMOGENEITY_MODEL"
 echo "客户端数量: $NUM_CLIENTS"
 echo "算法: $ALGORITHM"
 echo "使用ETF分类器: $USE_ETF"
+echo "使用全局模型: $USE_GLOBAL_MODEL"
 if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
     echo "数据分布配置: $DISTRIBUTION_CONFIG"
 fi
@@ -105,5 +109,6 @@ TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" HF_ENDPOINT=https://hf-mirror.com python -u m
   -mu $MU \
   -wb $USE_WANDB \
   -etf $USE_ETF \
+  -gm $USE_GLOBAL_MODEL \
   -GPath $GENERATOR_PATH \
   ${DISTRIBUTION_CONFIG:+-dc "$DISTRIBUTION_CONFIG"}

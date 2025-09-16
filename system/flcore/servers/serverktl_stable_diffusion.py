@@ -9,6 +9,7 @@ import torchvision.transforms as transforms
 from flcore.clients.clientktl import clientKTL
 from flcore.servers.serverbase import Server
 from flcore.clients.clientbase import load_item, save_item
+from flcore.trainmodel.models import BaseHeadSplit
 from threading import Thread
 from collections import defaultdict
 from torch.utils.data import DataLoader
@@ -36,6 +37,7 @@ class FedKTL(Server):
         self.server_epochs = args.server_epochs
         self.lamda = args.lamda
         self.use_etf = args.use_etf
+        self.use_global_model = args.use_global_model and args.is_homogeneity_model
         self.ETF_dim = args.num_classes
         self.classes_ids_tensor = torch.tensor(list(range(self.num_classes)),
                                                dtype=torch.int64, device=self.device)
@@ -166,15 +168,33 @@ class FedKTL(Server):
 
             proj_fc = nn.Linear(self.feature_dim, pipe.latent_dim).to(self.device)
             save_item(proj_fc, self.role, 'proj_fc', self.save_folder_name)
-        
+
+            # Initialize global model if enabled and homogeneous
+            if self.use_global_model:
+                print("Initializing global model for homogeneous setting...")
+                # Use the same model structure as clients (id=0 for server)
+                self.global_model = BaseHeadSplit(args, 0).to(self.device)
+                save_item(self.global_model, self.role, 'global_model', self.save_folder_name)
+                print('Global model initialized')
+
         self.MSEloss = nn.MSELoss()
 
 
     def train(self):
+        # Create global test dataset if global model is enabled
+        if self.use_global_model:
+            self.create_global_test_dataset()
+
         # 先评估初始性能
         print(f"\n-------------Initial Evaluation-------------")
         print("\nEvaluate initial heterogeneous models performance")
         self.evaluate()
+
+        # Test initial global model if enabled
+        if self.use_global_model:
+            print("\nEvaluate initial global model performance")
+            self.test_global_model()
+
         print("\nStarting training...")
 
         for i in range(1, self.global_rounds+1):
@@ -195,6 +215,11 @@ class FedKTL(Server):
             self.receive_protos()
             self.align()
             self.generate_images(i)
+
+            # Train and test global model if enabled
+            if self.use_global_model:
+                self.train_global_model(i)
+                self.test_global_model()
 
             # 训练后评估
             if i%self.eval_gap == 0:
@@ -355,6 +380,142 @@ class FedKTL(Server):
 
         print(f"Generated {len(data_generated)} synthetic samples for knowledge transfer")
         save_item(data_generated, self.role, 'data_generated', self.save_folder_name)
+
+    def create_global_test_dataset(self):
+        """Create global test dataset from all clients' test data"""
+        if not self.use_global_model:
+            return None
+
+        global_test_data = []
+        for client in self.clients:
+            testloader = client.load_test_data()
+            for x, y in testloader:
+                global_test_data.extend([(xx, yy) for xx, yy in zip(x, y)])
+
+        # Save global test dataset
+        save_item(global_test_data, self.role, 'global_test_data', self.save_folder_name)
+        print(f"Global test dataset created with {len(global_test_data)} samples")
+        return global_test_data
+
+    def train_global_model(self, round_idx):
+        """Train global model using aggregated prototypes"""
+        if not self.use_global_model:
+            return
+
+        print(f"\n==== Training Global Model (Round {round_idx}) ====")
+
+        # Load components
+        global_model = load_item(self.role, 'global_model', self.save_folder_name)
+        uploaded_protos = load_item(self.role, 'uploaded_protos', self.save_folder_name)
+
+        if self.use_etf:
+            ETF = load_item(self.role, 'ETF', self.save_folder_name)
+            ETF = F.normalize(ETF.T)
+
+        # Create training data from prototypes
+        proto_loader = DataLoader(uploaded_protos, self.server_batch_size,
+                                 drop_last=False, shuffle=True)
+
+        # Setup optimizer
+        optimizer = torch.optim.SGD(global_model.parameters(),
+                                   lr=self.server_learning_rate)
+
+        global_model.train()
+
+        # Training loop
+        for epoch in range(min(10, self.server_epochs // 10)):  # Fewer epochs for global model
+            epoch_loss = 0
+            for P, y in proto_loader:
+                P = P.to(self.device)
+                y = y.to(self.device)
+
+                # Forward pass
+                proj = global_model(P)
+
+                if self.use_etf:
+                    # ETF classifier with ArcFace loss
+                    proj = F.normalize(proj)
+                    cosine = F.linear(proj, ETF)
+
+                    # Use simplified loss for prototypes
+                    loss = F.cross_entropy(cosine * 10.0, y)  # Scale for better gradients
+                else:
+                    # Normal classifier loss
+                    loss = F.cross_entropy(proj, y)
+
+                # Backward pass
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(global_model.parameters(), 10)
+                optimizer.step()
+
+                epoch_loss += loss.item()
+
+            if epoch % 5 == 0:
+                print(f"  Global Model - Epoch {epoch}, Loss: {epoch_loss/len(proto_loader):.4f}")
+
+        # Save updated global model
+        save_item(global_model, self.role, 'global_model', self.save_folder_name)
+        print("Global model training completed")
+
+    def test_global_model(self):
+        """Test global model on global test dataset"""
+        if not self.use_global_model:
+            return None, None, None
+
+        # Load components
+        global_model = load_item(self.role, 'global_model', self.save_folder_name)
+        global_test_data = load_item(self.role, 'global_test_data', self.save_folder_name)
+
+        if global_test_data is None:
+            global_test_data = self.create_global_test_dataset()
+
+        if self.use_etf:
+            ETF = load_item(self.role, 'ETF', self.save_folder_name)
+            ETF = F.normalize(ETF.T)
+
+        # Create test loader
+        test_loader = DataLoader(global_test_data, batch_size=self.server_batch_size,
+                                shuffle=False, drop_last=False)
+
+        global_model.eval()
+        test_acc = 0
+        test_num = 0
+
+        with torch.no_grad():
+            for x, y in test_loader:
+                if type(x) == type([]):
+                    x[0] = x[0].to(self.device)
+                else:
+                    x = x.to(self.device)
+                y = y.to(self.device)
+
+                proj = global_model(x)
+
+                if self.use_etf:
+                    # ETF classifier prediction
+                    cosine = F.linear(F.normalize(proj), ETF)
+                    pred = torch.argmax(cosine, dim=1)
+                else:
+                    # Normal classifier prediction
+                    pred = torch.argmax(proj, dim=1)
+
+                test_acc += (torch.sum(pred == y)).item()
+                test_num += y.shape[0]
+
+        accuracy = test_acc / test_num if test_num > 0 else 0
+
+        print(f"Server Global Model: Acc: {accuracy:.4f}, Samples: {test_num}")
+
+        # Log to wandb
+        if self.use_wandb:
+            wandb.log({
+                "Server/test_accuracy": accuracy,
+                "Server/test_samples": test_num,
+                "Server/round": len(self.rs_test_acc)
+            })
+
+        return test_acc, test_num, accuracy
 
 
 # https://github.com/NeuralCollapseApplications/ImbalancedLearning/blob/main/models/resnet.py#L347

@@ -197,6 +197,8 @@ if __name__ == "__main__":
     parser.add_argument('-mu', "--mu", type=float, default=50.0)
     parser.add_argument('-etf', "--use_etf", type=int, default=1,
                         help="Whether to use ETF classifier (1=use, 0=not use)")
+    parser.add_argument('-gm', "--use_global_model", type=int, default=0,
+                        help="Whether to use global model (1=use, 0=not use, only valid for homogeneous models)")
     parser.add_argument('-gbs', "--gen_batch_size", type=int, default=4,
                         help="Not related to the performance. A small value saves GPU memory.")
     # wandb

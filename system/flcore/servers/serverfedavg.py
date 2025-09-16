@@ -23,31 +23,37 @@ class FedAvg(Server):
         print("Finished creating FedAvg server and clients.")
 
         self.Budget = []
+        self.args = args  # Store args for later use
         self.use_global_model = args.use_global_model and args.is_homogeneity_model
 
-        # Initialize global model for homogeneous setting
+        # Initialize models
         if args.save_folder_name == 'temp' or 'temp' not in args.save_folder_name:
+            # Initialize client models first
+            for client in self.clients:
+                model = BaseHeadSplit(args, client.id).to(self.device)
+                save_item(model, client.role, 'model', client.save_folder_name)
+
+            # Initialize global model for homogeneous setting
             if self.use_global_model:
                 print("Initializing global model for FedAvg...")
                 # Use the same model structure as clients
                 self.global_model = BaseHeadSplit(args, 0).to(self.device)
                 save_item(self.global_model, self.role, 'global_model', self.save_folder_name)
                 print('Global model initialized for FedAvg')
-            else:
-                # Initialize models for each client
-                for client in self.clients:
-                    model = BaseHeadSplit(args, client.id).to(self.device)
-                    save_item(model, client.role, 'model', client.save_folder_name)
 
     def train(self):
         # Initial evaluation
         print(f"\n-------------Initial Evaluation-------------")
+        print(f"USE_GLOBAL_MODEL: {self.use_global_model}")
+        print(f"IS_HOMOGENEITY_MODEL: {self.args.is_homogeneity_model}")
         print("\nEvaluate initial models performance")
         self.evaluate()
 
         if self.use_global_model:
             print("\nEvaluate initial global model performance")
             self.test_global_model()
+        else:
+            print(f"\nGlobal model evaluation skipped (use_global_model={self.use_global_model})")
 
         print("\nStarting FedAvg training...")
 
@@ -190,14 +196,14 @@ class FedAvg(Server):
 
         accuracy = test_acc / test_num if test_num > 0 else 0
 
-        print(f"Global Model: Acc: {accuracy:.4f}, Samples: {test_num}")
+        print(f"Server Global Model: Acc: {accuracy:.4f}, Samples: {test_num}")
 
         # Log to wandb
         if self.use_wandb:
             wandb.log({
-                "Global/test_accuracy": accuracy,
-                "Global/test_samples": test_num,
-                "Global/round": len(self.rs_test_acc)
+                "Server/test_accuracy": accuracy,
+                "Server/test_samples": test_num,
+                "Server/round": len(self.rs_test_acc)
             })
 
         return test_acc, test_num, accuracy

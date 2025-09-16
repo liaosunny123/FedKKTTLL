@@ -1,0 +1,23 @@
+{
+  "0": {
+    "class_distribution": {
+      "0": 0,
+      "1": 9,
+      "2": 0,
+      "3": 668,
+      "4": 476,
+      "5": 287,
+      "6": 5,
+      "7": 167,
+      "8": 0,
+      "9": 8
+    },
+    "_comment": "Client 0: Original problematic distribution - missing classes 0,2,8"
+  },
+  "1": {
+    "_comment": "Client 1: Use original data without modification"
+  },
+  "2": {
+    "_comment": "Client 2: Use original data without modification"
+  }
+}

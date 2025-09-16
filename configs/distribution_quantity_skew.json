@@ -1,0 +1,14 @@
+{
+  "0": {
+    "max_samples": 100,
+    "_comment": "Client 0: Very few samples (quantity skew)"
+  },
+  "1": {
+    "max_samples": 500,
+    "_comment": "Client 1: Moderate samples"
+  },
+  "2": {
+    "max_samples": 5000,
+    "_comment": "Client 2: Many samples"
+  }
+}

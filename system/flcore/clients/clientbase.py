@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import label_binarize
 from sklearn import metrics
 from utils.data_utils import read_client_data
+from utils.data_distribution import DataDistributionManager
 from flcore.trainmodel.models import BaseHeadSplit
 import wandb
 
@@ -47,12 +48,23 @@ class Client(object):
         # Use wandb from server (don't initialize here)
         self.use_wandb = getattr(args, 'use_wandb', False)
 
+        # Initialize data distribution manager
+        self.distribution_config = getattr(args, 'distribution_config', None)
+        self.distribution_manager = DataDistributionManager(self.distribution_config)
+
 
     def load_train_data(self, batch_size=None):
         if batch_size == None:
             batch_size = self.batch_size
         train_data = read_client_data(self.dataset, self.id, is_train=True)
-        return DataLoader(train_data, batch_size, drop_last=True, shuffle=False)
+
+        # Apply distribution configuration if available
+        if self.distribution_manager:
+            train_data = self.distribution_manager.filter_client_data(
+                self.id, train_data, self.num_classes
+            )
+
+        return DataLoader(train_data, batch_size, drop_last=True, shuffle=True)
 
     def load_test_data(self, batch_size=None):
         if batch_size == None:

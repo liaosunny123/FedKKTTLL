@@ -1,0 +1,47 @@
+{
+  "0": {
+    "class_distribution": {
+      "0": 5,
+      "1": 10,
+      "2": 20,
+      "3": 500,
+      "4": 450,
+      "5": 300,
+      "6": 10,
+      "7": 100,
+      "8": 5,
+      "9": 10
+    },
+    "_comment": "Client 0: Dirichlet-like distribution, heavily skewed to classes 3,4,5"
+  },
+  "1": {
+    "class_distribution": {
+      "0": 400,
+      "1": 350,
+      "2": 300,
+      "3": 20,
+      "4": 15,
+      "5": 10,
+      "6": 200,
+      "7": 150,
+      "8": 100,
+      "9": 50
+    },
+    "_comment": "Client 1: Dirichlet-like distribution, heavily skewed to classes 0,1,2"
+  },
+  "2": {
+    "class_distribution": {
+      "0": 50,
+      "1": 100,
+      "2": 150,
+      "3": 100,
+      "4": 100,
+      "5": 100,
+      "6": 400,
+      "7": 350,
+      "8": 300,
+      "9": 250
+    },
+    "_comment": "Client 2: Dirichlet-like distribution, heavily skewed to classes 6,7,8,9"
+  }
+}

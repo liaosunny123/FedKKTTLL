@@ -44,6 +44,12 @@ MU=100                   # 损失权重系数
 # 使用 wandb
 USE_WANDB=True
 
+# 数据分布配置文件（可选）
+# 取消注释以下行以使用特定的数据分布配置
+# DISTRIBUTION_CONFIG="../configs/distribution_fix_missing.json"
+DISTRIBUTION_CONFIG="../configs/distribution_missing_classes.json"
+# DISTRIBUTION_CONFIG="../configs/distribution_dirichlet.json"
+
 # ========================================
 # 运行命令
 # ========================================
@@ -55,6 +61,9 @@ echo "模型族: $MODEL_FAMILY"
 echo "同构模型: $IS_HOMOGENEITY_MODEL"
 echo "客户端数量: $NUM_CLIENTS"
 echo "算法: $ALGORITHM"
+if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
+    echo "数据分布配置: $DISTRIBUTION_CONFIG"
+fi
 echo "========================================="
 
 # 设置CUDA相关环境变量
@@ -91,4 +100,5 @@ TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" HF_ENDPOINT=https://hf-mirror.com python -u m
   -lam $LAMBDA \
   -mu $MU \
   -wb $USE_WANDB \
-  -GPath $GENERATOR_PATH
+  -GPath $GENERATOR_PATH \
+  ${DISTRIBUTION_CONFIG:+-dc "$DISTRIBUTION_CONFIG"}

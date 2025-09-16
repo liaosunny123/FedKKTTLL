@@ -67,16 +67,6 @@ class clientKTL(Client):
             max_local_epochs = np.random.randint(1, max_local_epochs // 2)
 
         epoch_losses = []
-        # Debug: Check data distribution for Client 0
-        if self.id == 0 and self.current_round == 1:
-            label_counts = defaultdict(int)
-            for _, y in trainloader:
-                if isinstance(y, torch.Tensor):
-                    for label in y.cpu().numpy():
-                        label_counts[label] += 1
-            print(f"Client {self.id} label distribution: {dict(label_counts)}")
-            print(f"Client {self.id} total samples: {sum(label_counts.values())}")
-
         for step in range(max_local_epochs):
             batch_losses = []
             for i, (x, y) in enumerate(trainloader):
@@ -124,17 +114,6 @@ class clientKTL(Client):
                 optimizer.zero_grad()
                 opt_proj_fc.zero_grad()
                 loss.backward()
-
-                # Debug gradient norms
-                if self.id == 0 and i == 0 and step == 0:
-                    total_norm = 0
-                    for p in model.parameters():
-                        if p.grad is not None:
-                            param_norm = p.grad.data.norm(2)
-                            total_norm += param_norm.item() ** 2
-                    total_norm = total_norm ** (1. / 2.)
-                    print(f"Client {self.id} gradient norm before clipping: {total_norm:.4f}")
-
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 100)
                 torch.nn.utils.clip_grad_norm_(proj_fc.parameters(), 100)
                 optimizer.step()
@@ -147,10 +126,9 @@ class clientKTL(Client):
 
                 # Log epoch metrics to wandb
                 if self.use_wandb:
-                    self.train_step_count += 1
-                    global_step = (self.current_round - 1) * max_local_epochs + step
+                    # Use consistent global step calculation
+                    global_step = self.current_round * 1000 + step  # Ensure unique steps
                     wandb.log({
-                        f"Client_{self.id}/step": global_step,
                         f"Client_{self.id}/epoch_loss": epoch_loss,
                         f"Client_{self.id}/learning_rate": current_lr,
                         f"Client_{self.id}/round": self.current_round,
@@ -166,7 +144,7 @@ class clientKTL(Client):
         # Log training summary to wandb
         if self.use_wandb:
             avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
-            global_step = self.current_round * max_local_epochs
+            global_step = self.current_round * 1000 + max_local_epochs  # Consistent with epoch logging
             wandb.log({
                 f"Client_{self.id}/train_time": train_time,
                 f"Client_{self.id}/total_epochs": max_local_epochs,

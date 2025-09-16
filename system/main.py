@@ -200,6 +200,9 @@ if __name__ == "__main__":
     # wandb
     parser.add_argument('-wb', "--use_wandb", type=bool, default=False,
                         help="Use wandb for logging metrics")
+    # data distribution
+    parser.add_argument('-dc', "--distribution_config", type=str, default=None,
+                        help="Path to JSON file defining client data distribution")
 
 
     args = parser.parse_args()
@@ -232,6 +235,8 @@ if __name__ == "__main__":
     print("Backbone: {}".format(args.model_family))
     print("Homogeneous model: {}".format("Yes" if args.is_homogeneity_model else "No"))
     print("Using device: {}".format(args.device))
+    if args.distribution_config:
+        print("Distribution config: {}".format(args.distribution_config))
     print("Auto break: {}".format(args.auto_break))
     if not args.auto_break:
         print("Global rounds: {}".format(args.global_rounds))

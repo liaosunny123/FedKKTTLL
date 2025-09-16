@@ -1,0 +1,22 @@
+{
+  "0": {
+    "classes": [0, 1],
+    "_comment": "Client 0: Only has 2 classes (label skew with K=2)"
+  },
+  "1": {
+    "classes": [2, 3],
+    "_comment": "Client 1: Only has 2 classes"
+  },
+  "2": {
+    "classes": [4, 5],
+    "_comment": "Client 2: Only has 2 classes"
+  },
+  "3": {
+    "classes": [6, 7],
+    "_comment": "Client 3: Only has 2 classes"
+  },
+  "4": {
+    "classes": [8, 9],
+    "_comment": "Client 4: Only has 2 classes"
+  }
+}

@@ -10,6 +10,7 @@ import logging
 from flcore.servers.serverktl_stylegan_xl import FedKTL as FedKTL_stylegan_xl
 from flcore.servers.serverktl_stylegan_3 import FedKTL as FedKTL_stylegan_3
 from flcore.servers.serverktl_stable_diffusion import FedKTL as FedKTL_stable_diffusion
+from flcore.servers.serverktl_stable_diffusion_proto import FedKTL as FedKTL_stable_diffusion_proto
 from flcore.servers.serverfedavg import FedAvg
 
 from utils.result_utils import average_data
@@ -119,7 +120,12 @@ def run(args):
             server = FedKTL_stylegan_3(args, i)
 
         elif args.algorithm == "FedKTL-stable-diffusion":
-            server = FedKTL_stable_diffusion(args, i)
+            if args.use_prototype_aggregation:
+                print("Using prototype aggregation version")
+                server = FedKTL_stable_diffusion_proto(args, i)
+            else:
+                print("Using original generator version")
+                server = FedKTL_stable_diffusion(args, i)
 
         else:
             raise NotImplementedError(f"Algorithm {args.algorithm} not implemented")
@@ -205,6 +211,9 @@ if __name__ == "__main__":
                         help="Whether to use global model (1=use, 0=not use, only valid for homogeneous models)")
     parser.add_argument('-gbs', "--gen_batch_size", type=int, default=4,
                         help="Not related to the performance. A small value saves GPU memory.")
+    parser.add_argument('-proto', "--use_prototype_aggregation", type=int,
+                        default=int(os.environ.get('IS_GLOBAL_MODEL_GENERATED_LOADER', '0')),
+                        help="Use prototype aggregation instead of generator (1=use prototype, 0=use generator)")
     # wandb
     parser.add_argument('-wb', "--use_wandb", type=bool, default=False,
                         help="Use wandb for logging metrics")
@@ -242,6 +251,8 @@ if __name__ == "__main__":
     print("Number of classes: {}".format(args.num_classes))
     print("Backbone: {}".format(args.model_family))
     print("Homogeneous model: {}".format("Yes" if args.is_homogeneity_model else "No"))
+    if "FedKTL" in args.algorithm:
+        print("Prototype aggregation: {}".format("Yes (FedProto-like)" if args.use_prototype_aggregation else "No (Use generator)"))
     print("Using device: {}".format(args.device))
     if args.distribution_config:
         print("Distribution config: {}".format(args.distribution_config))

@@ -55,6 +55,11 @@ USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)
 # FedKTL: 全局模型基于prototype训练
 USE_GLOBAL_MODEL=1       # 是否使用全局模型 (1=使用, 0=不使用，仅在同构模型下有效)
 
+# Prototype聚合配置 (FedProto-like)
+# 当设置为1时，将在参数层面直接聚合prototype，绕过生成器
+# 当设置为0时，使用原始的FedKTL生成器方法
+IS_GLOBAL_MODEL_GENERATED_LOADER=0  # 是否使用prototype聚合 (1=使用prototype聚合, 0=使用生成器)
+
 # 使用 wandb
 USE_WANDB=True
 
@@ -77,6 +82,13 @@ echo "客户端数量: $NUM_CLIENTS"
 echo "算法: $ALGORITHM"
 echo "使用ETF分类器: $USE_ETF"
 echo "使用全局模型: $USE_GLOBAL_MODEL"
+if [[ "$ALGORITHM" == "FedKTL-"* ]]; then
+    if [ "$IS_GLOBAL_MODEL_GENERATED_LOADER" == "1" ]; then
+        echo "Prototype聚合模式: 是 (FedProto-like)"
+    else
+        echo "Prototype聚合模式: 否 (使用生成器)"
+    fi
+fi
 if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
     echo "数据分布配置: $DISTRIBUTION_CONFIG"
 fi
@@ -95,8 +107,11 @@ export TORCH_CUDA_ARCH_LIST="8.9"
 echo "CUDA_HOME: $CUDA_HOME"
 echo "TORCH_CUDA_ARCH_LIST: $TORCH_CUDA_ARCH_LIST"
 
+# 导出环境变量供Python脚本使用
+export IS_GLOBAL_MODEL_GENERATED_LOADER
+
 # 构建运行命令
-CMD="TORCH_CUDA_ARCH_LIST='8.0;8.6;8.9' HF_ENDPOINT=https://hf-mirror.com python -u main.py"
+CMD="TORCH_CUDA_ARCH_LIST='8.0;8.6;8.9' HF_ENDPOINT=https://hf-mirror.com IS_GLOBAL_MODEL_GENERATED_LOADER=$IS_GLOBAL_MODEL_GENERATED_LOADER python -u main.py"
 CMD="$CMD -t $TIMES"
 CMD="$CMD -ab $AUTO_BREAK"
 CMD="$CMD -lr $LOCAL_LR"

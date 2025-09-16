@@ -38,6 +38,7 @@ class FedKTL(Server):
         self.lamda = args.lamda
         self.use_etf = args.use_etf
         self.use_global_model = args.use_global_model and args.is_homogeneity_model
+        self.use_prototype_aggregation = args.use_prototype_aggregation
         self.ETF_dim = args.num_classes
         self.classes_ids_tensor = torch.tensor(list(range(self.num_classes)),
                                                dtype=torch.int64, device=self.device)

@@ -29,14 +29,14 @@ LOCAL_EPOCHS=1           # 本地训练轮次
 # 可选算法：FedAvg, FedKTL-stylegan-3, FedKTL-stylegan-xl, FedKTL-stable-diffusion
 ALGORITHM="FedAvg"  # 联邦学习算法
 
-# 生成器配置（仅FedKTL算法需要）
+# 生成器配置
 # FedKTL-stable-diffusion:
 #GENERATOR_PATH="runwayml/stable-diffusion-v1-5"
 # FedKTL-stylegan-3:
 #GENERATOR_PATH="stylegan/stylegan-3-models/stylegan3-t-afhqv2-512x512.pkl"
 # FedKTL-stylegan-xl:
 #GENERATOR_PATH="stylegan/stylegan-xl-models/stylegan_xl-afhqv2-512x512.pkl"
-GENERATOR_PATH=""  # FedAvg不需要生成器
+GENERATOR_PATH=""
 
 # 服务器端参数
 SERVER_LR=0.1            # 服务器学习率
@@ -47,7 +47,7 @@ SERVER_EPOCHS=100        # 服务器训练轮次
 LAMBDA=0.01              # 正则化系数
 MU=100                   # 损失权重系数
 
-# ETF Classifier配置 (仅FedKTL算法使用)
+# ETF Classifier配置
 USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)
 
 # 全局模型配置

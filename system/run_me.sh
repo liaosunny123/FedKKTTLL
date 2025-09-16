@@ -51,7 +51,7 @@ echo "客户端数量: $NUM_CLIENTS"
 echo "算法: $ALGORITHM"
 echo "========================================="
 
-python -u main.py \
+HF_ENDPOINT=https://hf-mirror.com python -u main.py \
   -t $TIMES \
   -ab $AUTO_BREAK \
   -lr $LOCAL_LR \

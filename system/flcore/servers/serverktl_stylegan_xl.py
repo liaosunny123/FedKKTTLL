@@ -142,10 +142,10 @@ class FedKTL(Server):
         # Log final metrics to wandb
         if self.use_wandb:
             wandb.log({
-                "final/best_accuracy": max(self.rs_test_acc),
-                "final/best_auc": max(self.rs_test_auc) if self.rs_test_auc else 0,
-                "final/avg_time_per_round": sum(self.Budget[1:])/len(self.Budget[1:]) if len(self.Budget) > 1 else 0,
-                "final/total_rounds": len(self.rs_test_acc)
+                "Final/best_accuracy": max(self.rs_test_acc),
+                "Final/best_auc": max(self.rs_test_auc) if self.rs_test_auc else 0,
+                "Final/avg_time_per_round": sum(self.Budget[1:])/len(self.Budget[1:]) if len(self.Budget) > 1 else 0,
+                "Final/total_rounds": len(self.rs_test_acc)
             })
             wandb.finish()
 

@@ -60,13 +60,14 @@ class Server(object):
         self.train_slow_rate = args.train_slow_rate
         self.send_slow_rate = args.send_slow_rate
 
-        # Initialize wandb for server
+        # Initialize wandb for server and all clients
         self.use_wandb = getattr(args, 'use_wandb', False)
         if self.use_wandb:
+            run_name = f"{self.algorithm}_{self.dataset}_clients{self.num_clients}_run{times}"
             wandb.init(
                 project="fedktl",
                 entity="epicmo",
-                name=f"{self.algorithm}_server_run_{times}",
+                name=run_name,
                 config={
                     "algorithm": self.algorithm,
                     "dataset": self.dataset,
@@ -77,10 +78,28 @@ class Server(object):
                     "batch_size": self.batch_size,
                     "learning_rate": self.learning_rate,
                     "join_ratio": self.join_ratio,
-                    "eval_gap": self.eval_gap
+                    "eval_gap": self.eval_gap,
+                    "client_drop_rate": self.client_drop_rate,
+                    "train_slow_rate": self.train_slow_rate,
+                    "send_slow_rate": self.send_slow_rate
                 },
                 reinit=True
             )
+            # Define custom x-axis for metrics
+            wandb.define_metric("Global/round")
+            wandb.define_metric("Global/*", step_metric="Global/round")
+
+            # Define step metric for each client
+            for i in range(self.num_clients):
+                wandb.define_metric(f"Client_{i}/step")
+                wandb.define_metric(f"Client_{i}/epoch_loss", step_metric=f"Client_{i}/step")
+                wandb.define_metric(f"Client_{i}/learning_rate", step_metric=f"Client_{i}/step")
+
+                # Other client metrics use global round as step
+                wandb.define_metric(f"Client_{i}/test_accuracy", step_metric="Global/round")
+                wandb.define_metric(f"Client_{i}/test_auc", step_metric="Global/round")
+                wandb.define_metric(f"Client_{i}/train_time", step_metric="Global/round")
+                wandb.define_metric(f"Client_{i}/avg_train_loss", step_metric="Global/round")
 
 
     def set_clients(self, clientObj):
@@ -198,13 +217,8 @@ class Server(object):
             tot_auc.append(auc*ns)
             num_samples.append(ns)
 
-            # Log individual client metrics to wandb
-            if self.use_wandb:
-                wandb.log({
-                    f"client_{c.id}/accuracy": acc,
-                    f"client_{c.id}/auc": auc,
-                    f"client_{c.id}/samples": ns
-                })
+            # Individual client metrics are logged by clients themselves
+            # No need to log here to avoid duplication
 
         ids = [c.id for c in self.clients]
 
@@ -237,14 +251,14 @@ class Server(object):
         if self.use_wandb:
             current_round = len(self.rs_test_acc)
             wandb.log({
-                "global/round": current_round,
-                "global/test_accuracy": test_acc,
-                "global/test_auc": test_auc,
-                "global/num_selected_clients": self.current_num_join_clients,
-                "global/mean_client_accuracy": np.mean(accs),
-                "global/std_client_accuracy": np.std(accs),
-                "global/mean_client_auc": np.mean(aucs),
-                "global/std_client_auc": np.std(aucs)
+                "Global/round": current_round,
+                "Global/test_accuracy": test_acc,
+                "Global/test_auc": test_auc,
+                "Global/num_selected_clients": self.current_num_join_clients,
+                "Global/mean_client_accuracy": np.mean(accs),
+                "Global/std_client_accuracy": np.std(accs),
+                "Global/mean_client_auc": np.mean(aucs),
+                "Global/std_client_auc": np.std(aucs)
             })
 
         if acc == None:

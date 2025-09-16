@@ -44,26 +44,8 @@ class Client(object):
 
         self.loss = nn.CrossEntropyLoss()
 
-        # Initialize wandb for this client
+        # Use wandb from server (don't initialize here)
         self.use_wandb = getattr(args, 'use_wandb', False)
-        if self.use_wandb:
-            wandb.init(
-                project="fedktl",
-                entity="epicmo",
-                name=f"{self.algorithm}_client_{self.id}",
-                config={
-                    "algorithm": self.algorithm,
-                    "dataset": self.dataset,
-                    "client_id": self.id,
-                    "num_classes": self.num_classes,
-                    "batch_size": self.batch_size,
-                    "learning_rate": self.learning_rate,
-                    "local_epochs": self.local_epochs,
-                    "train_samples": self.train_samples,
-                    "test_samples": self.test_samples
-                },
-                reinit=True
-            )
 
 
     def load_train_data(self, batch_size=None):
@@ -127,9 +109,9 @@ class Client(object):
         # Log metrics to wandb
         if self.use_wandb:
             wandb.log({
-                f"client_{self.id}/test_accuracy": test_acc / test_num,
-                f"client_{self.id}/test_auc": auc,
-                f"client_{self.id}/test_samples": test_num
+                f"Client_{self.id}/test_accuracy": test_acc / test_num,
+                f"Client_{self.id}/test_auc": auc,
+                f"Client_{self.id}/test_samples": test_num
             })
 
         return test_acc, test_num, auc
@@ -157,8 +139,8 @@ class Client(object):
         # Log training metrics to wandb
         if self.use_wandb:
             wandb.log({
-                f"client_{self.id}/train_loss": losses / train_num if train_num > 0 else 0,
-                f"client_{self.id}/train_samples": train_num
+                f"Client_{self.id}/train_loss": losses / train_num if train_num > 0 else 0,
+                f"Client_{self.id}/train_samples": train_num
             })
 
         return losses, train_num

@@ -30,6 +30,7 @@ class clientKTL(Client):
         self.learning_rate_decay = getattr(args, 'learning_rate_decay', False)
         self.learning_rate_decay_gamma = getattr(args, 'learning_rate_decay_gamma', 0.99)
         self.current_round = 0
+        self.train_step_count = 0  # 用于跟踪训练步数
 
 
     def train(self):
@@ -121,11 +122,12 @@ class clientKTL(Client):
 
                 # Log epoch metrics to wandb
                 if self.use_wandb:
+                    self.train_step_count += 1
                     wandb.log({
-                        f"client_{self.id}/epoch": step,
-                        f"client_{self.id}/epoch_loss": epoch_loss,
-                        f"client_{self.id}/learning_rate": current_lr,
-                        f"client_{self.id}/round": self.current_round,
+                        f"Client_{self.id}/step": self.train_step_count,
+                        f"Client_{self.id}/epoch_loss": epoch_loss,
+                        f"Client_{self.id}/learning_rate": current_lr,
+                        f"Client_{self.id}/round": self.current_round,
                     })
 
         save_item(model, self.role, 'model', self.save_folder_name)
@@ -138,10 +140,10 @@ class clientKTL(Client):
         if self.use_wandb:
             avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
             wandb.log({
-                f"client_{self.id}/train_time": train_time,
-                f"client_{self.id}/total_epochs": max_local_epochs,
-                f"client_{self.id}/avg_train_loss": avg_loss,
-                f"client_{self.id}/train_round": self.train_time_cost['num_rounds']
+                f"Client_{self.id}/train_time": train_time,
+                f"Client_{self.id}/total_epochs": max_local_epochs,
+                f"Client_{self.id}/avg_train_loss": avg_loss,
+                f"Client_{self.id}/global_round": self.current_round
             })
 
     def test_metrics(self):
@@ -187,9 +189,9 @@ class clientKTL(Client):
         # Log test metrics to wandb
         if self.use_wandb:
             wandb.log({
-                f"client_{self.id}/test_accuracy": test_acc / test_num if test_num > 0 else 0,
-                f"client_{self.id}/test_auc": auc,
-                f"client_{self.id}/test_samples": test_num
+                f"Client_{self.id}/test_accuracy": test_acc / test_num if test_num > 0 else 0,
+                f"Client_{self.id}/test_auc": auc,
+                f"Client_{self.id}/test_samples": test_num
             })
 
         return test_acc, test_num, auc

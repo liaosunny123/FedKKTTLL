@@ -44,8 +44,9 @@ class FedKTL(Server):
         self.server_batch_size = args.server_batch_size
         self.server_epochs = args.server_epochs
         self.lamda = args.lamda
+        self.use_etf = args.use_etf
         self.ETF_dim = args.num_classes
-        self.classes_ids_tensor = torch.tensor(list(range(self.num_classes)), 
+        self.classes_ids_tensor = torch.tensor(list(range(self.num_classes)),
                                                dtype=torch.int64, device=self.device)
         
         if args.save_folder_name == 'temp' or 'temp' not in args.save_folder_name:
@@ -63,25 +64,36 @@ class FedKTL(Server):
             save_item(G, self.role, 'G', self.save_folder_name)
             print('Generator', G)
 
-            F = Feature_Transformer(self.ETF_dim, G.w_dim).to(self.device)
-            save_item(F, self.role, 'F', self.save_folder_name)
-            print('Feature_Transformer', F)
+            # Initialize Feature_Transformer
+            if self.use_etf:
+                F = Feature_Transformer(self.ETF_dim, G.w_dim).to(self.device)
+                save_item(F, self.role, 'F', self.save_folder_name)
+                print('Feature_Transformer', F)
+            else:
+                F = Feature_Transformer(self.num_classes, G.w_dim).to(self.device)
+                save_item(F, self.role, 'F', self.save_folder_name)
+                print('Feature_Transformer (non-ETF)', F)
 
             Centroids = nn.Embedding(self.num_classes, G.w_dim).to(self.device)
             save_item(Centroids, self.role, 'Centroids', self.save_folder_name)
             print('Centroids', Centroids)
 
-            while True:
-                try:
-                    P = generate_random_orthogonal_matrix(self.ETF_dim, self.num_classes)
-                    I = torch.eye(self.num_classes)
-                    one = torch.ones(self.num_classes, self.num_classes)
-                    F = np.sqrt(self.num_classes / (self.num_classes-1)) * torch.matmul(P, I-((1/self.num_classes) * one))
-                    ETF = F.requires_grad_(False).to(self.device)
-                    save_item(ETF, self.role, 'ETF', self.save_folder_name)
-                    break
-                except AssertionError:
-                    pass
+            # Initialize ETF only if use_etf is enabled
+            if self.use_etf:
+                while True:
+                    try:
+                        P = generate_random_orthogonal_matrix(self.ETF_dim, self.num_classes)
+                        I = torch.eye(self.num_classes)
+                        one = torch.ones(self.num_classes, self.num_classes)
+                        F = np.sqrt(self.num_classes / (self.num_classes-1)) * torch.matmul(P, I-((1/self.num_classes) * one))
+                        ETF = F.requires_grad_(False).to(self.device)
+                        save_item(ETF, self.role, 'ETF', self.save_folder_name)
+                        print('ETF initialized')
+                        break
+                    except AssertionError:
+                        pass
+            else:
+                print('ETF classifier disabled')
             
             clientprocess = transforms.Compose(
                 [transforms.Resize(size=self.img_shape[-1]), 

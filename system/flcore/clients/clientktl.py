@@ -17,6 +17,7 @@ class clientKTL(Client):
         super().__init__(args, id, train_samples, test_samples, **kwargs)
 
         self.mu = args.mu
+        self.use_etf = args.use_etf
         self.ETF_dim = args.num_classes
 
         self.m = 0.5
@@ -36,8 +37,11 @@ class clientKTL(Client):
     def train(self):
         trainloader = self.load_train_data()
         model = load_item(self.role, 'model', self.save_folder_name)
-        ETF = load_item('Server', 'ETF', self.save_folder_name)
-        ETF = F.normalize(ETF.T)
+
+        # Conditionally load ETF
+        if self.use_etf:
+            ETF = load_item('Server', 'ETF', self.save_folder_name)
+            ETF = F.normalize(ETF.T)
 
         data_generated = load_item('Server', 'data_generated', self.save_folder_name)
         if data_generated is not None:
@@ -78,18 +82,24 @@ class clientKTL(Client):
                 if self.train_slow:
                     time.sleep(0.1 * np.abs(np.random.rand()))
                 proj = model(x)
-                proj = F.normalize(proj)
-                cosine = F.linear(proj, ETF)
 
-                # ArcFace loss with clipping to prevent NaN
-                one_hot = F.one_hot(y, self.num_classes).to(self.device)
-                # Clip cosine values to prevent NaN in arccos
-                cosine_clipped = torch.clamp(cosine, -1.0 + 1e-7, 1.0 - 1e-7)
-                arccos = torch.acos(cosine_clipped)
-                cosine_new = torch.cos(arccos + self.m)
-                cosine = one_hot * cosine_new + (1 - one_hot) * cosine
-                cosine = cosine * self.s
-                loss = self.loss(cosine, y)
+                if self.use_etf:
+                    # ETF classifier with ArcFace loss
+                    proj = F.normalize(proj)
+                    cosine = F.linear(proj, ETF)
+
+                    # ArcFace loss with clipping to prevent NaN
+                    one_hot = F.one_hot(y, self.num_classes).to(self.device)
+                    # Clip cosine values to prevent NaN in arccos
+                    cosine_clipped = torch.clamp(cosine, -1.0 + 1e-7, 1.0 - 1e-7)
+                    arccos = torch.acos(cosine_clipped)
+                    cosine_new = torch.cos(arccos + self.m)
+                    cosine = one_hot * cosine_new + (1 - one_hot) * cosine
+                    cosine = cosine * self.s
+                    loss = self.loss(cosine, y)
+                else:
+                    # Normal classifier loss
+                    loss = self.loss(proj, y)
                 batch_losses.append(loss.item())
 
                 # knowledge transfer
@@ -156,8 +166,11 @@ class clientKTL(Client):
     def test_metrics(self):
         testloaderfull = self.load_test_data()
         model = load_item(self.role, 'model', self.save_folder_name)
-        ETF = load_item('Server', 'ETF', self.save_folder_name)
-        ETF = F.normalize(ETF.T)
+
+        # Conditionally load ETF
+        if self.use_etf:
+            ETF = load_item('Server', 'ETF', self.save_folder_name)
+            ETF = F.normalize(ETF.T)
         # model.to(self.device)
         model.eval()
 
@@ -174,9 +187,17 @@ class clientKTL(Client):
                     x = x.to(self.device)
                 y = y.to(self.device)
                 proj = model(x)
-                cosine = F.linear(F.normalize(proj), ETF)
 
-                test_acc += (torch.sum(torch.argmax(cosine, dim=1) == y)).item()
+                if self.use_etf:
+                    # ETF classifier prediction
+                    cosine = F.linear(F.normalize(proj), ETF)
+                    pred = torch.argmax(cosine, dim=1)
+                else:
+                    # Normal classifier prediction
+                    cosine = proj
+                    pred = torch.argmax(proj, dim=1)
+
+                test_acc += (torch.sum(pred == y)).item()
                 test_num += y.shape[0]
 
                 y_prob.append(cosine.detach().cpu().numpy())

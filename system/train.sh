@@ -41,6 +41,9 @@ SERVER_EPOCHS=100        # 服务器训练轮次
 LAMBDA=0.01              # 正则化系数
 MU=100                   # 损失权重系数
 
+# ETF Classifier配置
+USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)
+
 # 使用 wandb
 USE_WANDB=True
 
@@ -61,6 +64,7 @@ echo "模型族: $MODEL_FAMILY"
 echo "同构模型: $IS_HOMOGENEITY_MODEL"
 echo "客户端数量: $NUM_CLIENTS"
 echo "算法: $ALGORITHM"
+echo "使用ETF分类器: $USE_ETF"
 if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
     echo "数据分布配置: $DISTRIBUTION_CONFIG"
 fi
@@ -100,5 +104,6 @@ TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" HF_ENDPOINT=https://hf-mirror.com python -u m
   -lam $LAMBDA \
   -mu $MU \
   -wb $USE_WANDB \
+  -etf $USE_ETF \
   -GPath $GENERATOR_PATH \
   ${DISTRIBUTION_CONFIG:+-dc "$DISTRIBUTION_CONFIG"}

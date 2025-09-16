@@ -98,9 +98,9 @@ def run(args):
         # 如果启用同构模型，所有客户端使用第一个模型
         if args.is_homogeneity_model == 1:
             first_model = args.models[0]
-            args.models = [first_model] * len(args.models)
+            args.models = [first_model] * args.num_clients
             print(f"使用同构模型: {first_model}")
-            print(f"所有 {len(args.models)} 个客户端将使用相同模型")
+            print(f"所有 {args.num_clients} 个客户端将使用相同模型")
         else:
             print(f"使用异构模型族: {args.model_family}")
             

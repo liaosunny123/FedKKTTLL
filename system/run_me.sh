@@ -12,7 +12,7 @@ DEVICE_ID=1               # GPU设备ID
 # 数据集和模型配置
 DATASET="Cifar10"         # 数据集 (Cifar10, MNIST, etc.)
 MODEL_FAMILY="HtM10"      # 模型族 (HtM10包含10种异构模型)
-IS_HOMOGENEITY_MODEL=0    # 是否使用同构模型 (1=所有客户端使用相同模型, 0=使用异构模型族)
+IS_HOMOGENEITY_MODEL=1    # 是否使用同构模型 (1=所有客户端使用相同模型, 0=使用异构模型族)
 NUM_CLASSES=10            # 分类数量
 FEATURE_DIM=512           # 特征维度
 

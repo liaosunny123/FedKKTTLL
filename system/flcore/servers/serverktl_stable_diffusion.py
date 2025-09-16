@@ -172,10 +172,25 @@ class FedKTL(Server):
             # Initialize global model if enabled and homogeneous
             if self.use_global_model:
                 print("Initializing global model for homogeneous setting...")
-                # Use the same model structure as clients (id=0 for server)
-                self.global_model = BaseHeadSplit(args, 0).to(self.device)
+                # Create a simple MLP classifier for prototype-based training
+                # Input: feature_dim (prototype dimension)
+                # Output: num_classes
+                if self.use_etf:
+                    # When using ETF, we only need to project to ETF_dim
+                    self.global_model = nn.Sequential(
+                        nn.Linear(self.feature_dim, self.feature_dim),
+                        nn.ReLU(),
+                        nn.Linear(self.feature_dim, self.ETF_dim)
+                    ).to(self.device)
+                else:
+                    # Normal classifier: project to num_classes
+                    self.global_model = nn.Sequential(
+                        nn.Linear(self.feature_dim, self.feature_dim),
+                        nn.ReLU(),
+                        nn.Linear(self.feature_dim, self.num_classes)
+                    ).to(self.device)
                 save_item(self.global_model, self.role, 'global_model', self.save_folder_name)
-                print('Global model initialized')
+                print('Global model (MLP classifier) initialized')
 
         self.MSEloss = nn.MSELoss()
 
@@ -474,6 +489,10 @@ class FedKTL(Server):
             ETF = load_item(self.role, 'ETF', self.save_folder_name)
             ETF = F.normalize(ETF.T)
 
+        # Load a client model to extract features (use client 0's model as feature extractor)
+        client_model = load_item(self.clients[0].role, 'model', self.clients[0].save_folder_name)
+        client_model.eval()
+
         # Create test loader
         test_loader = DataLoader(global_test_data, batch_size=self.server_batch_size,
                                 shuffle=False, drop_last=False)
@@ -490,7 +509,12 @@ class FedKTL(Server):
                     x = x.to(self.device)
                 y = y.to(self.device)
 
-                proj = global_model(x)
+                # First extract features using client model
+                features = client_model(x)
+                features = F.normalize(features)
+
+                # Then classify using global model
+                proj = global_model(features)
 
                 if self.use_etf:
                     # ETF classifier prediction

@@ -428,8 +428,8 @@ class FedKTL(Server):
                     x = x.to(self.device)
                 y = y.to(self.device)
 
-                # First extract features using client model
-                features = client_model(x)
+                # First extract features using client model's base (feature extractor)
+                features = client_model.base(x)  # Use only the base part for feature extraction
                 features = F.normalize(features)
 
                 # Then classify using global model

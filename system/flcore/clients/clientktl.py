@@ -240,7 +240,8 @@ class clientKTL(Client):
                 y = y.to(self.device)
                 if self.train_slow:
                     time.sleep(0.1 * np.abs(np.random.rand()))
-                proj = model(x)
+                # Use full model output (10-dim class predictions) as prototypes
+                proj = model(x)  # Get class predictions (10-dim)
                 proj = F.normalize(proj)
 
                 for i, yy in enumerate(y):

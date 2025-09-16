@@ -113,21 +113,21 @@ class FedKTL(Server):
             if self.use_global_model:
                 print("Initializing global model for homogeneous setting...")
                 # Create a simple MLP classifier for prototype-based training
-                # Input: feature_dim (prototype dimension)
-                # Output: num_classes
+                # Input: num_classes (prototype dimension in this system)
+                # Output: num_classes for classification
                 if self.use_etf:
                     # When using ETF, we only need to project to ETF_dim
                     self.global_model = nn.Sequential(
-                        nn.Linear(self.feature_dim, self.feature_dim),
+                        nn.Linear(self.num_classes, 64),
                         nn.ReLU(),
-                        nn.Linear(self.feature_dim, self.ETF_dim)
+                        nn.Linear(64, self.ETF_dim)
                     ).to(self.device)
                 else:
-                    # Normal classifier: project to num_classes
+                    # Normal classifier: identity or simple transform
                     self.global_model = nn.Sequential(
-                        nn.Linear(self.feature_dim, self.feature_dim),
+                        nn.Linear(self.num_classes, 64),
                         nn.ReLU(),
-                        nn.Linear(self.feature_dim, self.num_classes)
+                        nn.Linear(64, self.num_classes)
                     ).to(self.device)
                 save_item(self.global_model, self.role, 'global_model', self.save_folder_name)
                 print('Global model (MLP classifier) initialized')
@@ -428,8 +428,8 @@ class FedKTL(Server):
                     x = x.to(self.device)
                 y = y.to(self.device)
 
-                # First extract features using client model's base (feature extractor)
-                features = client_model.base(x)  # Use only the base part for feature extraction
+                # Get class predictions from client model (10-dim)
+                features = client_model(x)  # Get full model output (10-dim class predictions)
                 features = F.normalize(features)
 
                 # Then classify using global model

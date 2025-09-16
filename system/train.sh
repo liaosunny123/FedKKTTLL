@@ -57,7 +57,20 @@ echo "客户端数量: $NUM_CLIENTS"
 echo "算法: $ALGORITHM"
 echo "========================================="
 
-HF_ENDPOINT=https://hf-mirror.com python -u main.py \
+# 设置CUDA相关环境变量
+export CUDA_HOME=$CONDA_PREFIX
+export CUDA_PATH=$CUDA_HOME
+export PATH=$CUDA_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+# RTX 4090架构
+export TORCH_CUDA_ARCH_LIST="8.9"
+
+# 确认设置
+echo "CUDA_HOME: $CUDA_HOME"
+echo "TORCH_CUDA_ARCH_LIST: $TORCH_CUDA_ARCH_LIST"
+
+TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" HF_ENDPOINT=https://hf-mirror.com python -u main.py \
   -t $TIMES \
   -ab $AUTO_BREAK \
   -lr $LOCAL_LR \

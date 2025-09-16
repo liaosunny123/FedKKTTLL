@@ -26,8 +26,11 @@ LOCAL_BATCH_SIZE=10      # 本地批次大小
 LOCAL_EPOCHS=1           # 本地训练轮次
 
 # 算法配置
-ALGORITHM="FedKTL-stable-diffusion"  # 联邦学习算法
-GENERATOR_PATH="runwayml/stable-diffusion-v1-5"  # Stable Diffusion模型路径
+#ALGORITHM="FedKTL-stable-diffusion"  # 联邦学习算法
+#GENERATOR_PATH="runwayml/stable-diffusion-v1-5"  # Stable Diffusion模型路径
+
+ALGORITHM="FedKTL-stylegan-3"  # 联邦学习算法
+GENERATOR_PATH="stylegan/stylegan-3-models/stylegan3-t-afhqv2-512x512.pkl"  # Stable Diffusion模型路径
 
 # 服务器端参数
 SERVER_LR=0.1            # 服务器学习率

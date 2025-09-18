@@ -26,8 +26,8 @@ LOCAL_BATCH_SIZE=10      # 本地批次大小
 LOCAL_EPOCHS=1           # 本地训练轮次
 
 # 算法配置
-# 可选算法：FedAvg, FedKTL-stylegan-3, FedKTL-stylegan-xl, FedKTL-stable-diffusion
-ALGORITHM="FedAvg"  # 联邦学习算法
+# 可选算法：FedAvg, FedEXT, FedKTL-stylegan-3, FedKTL-stylegan-xl, FedKTL-stable-diffusion
+ALGORITHM="FedEXT"  # 联邦学习算法
 
 # 生成器配置
 # FedKTL-stable-diffusion:

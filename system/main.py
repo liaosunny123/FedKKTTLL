@@ -12,6 +12,7 @@ from flcore.servers.serverktl_stylegan_3 import FedKTL as FedKTL_stylegan_3
 from flcore.servers.serverktl_stable_diffusion import FedKTL as FedKTL_stable_diffusion
 from flcore.servers.serverktl_stable_diffusion_proto import FedKTL as FedKTL_stable_diffusion_proto
 from flcore.servers.serverfedavg import FedAvg
+from flcore.servers.serverfedext import FedEXT
 
 from utils.result_utils import average_data
 from utils.mem_utils import MemReporter
@@ -112,6 +113,9 @@ def run(args):
         # select algorithm
         if args.algorithm == "FedAvg":
             server = FedAvg(args, i)
+
+        elif args.algorithm == "FedEXT":
+            server = FedEXT(args, i)
 
         elif args.algorithm == "FedKTL-stylegan-xl":
             server = FedKTL_stylegan_xl(args, i)

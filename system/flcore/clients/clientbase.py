@@ -79,6 +79,7 @@ class Client(object):
             test_data = read_client_data(self.dataset, self.id, is_train=False)
 
             # Apply same distribution configuration to test data
+            # This ensures domain-specific evaluation
             if self.distribution_manager and self.distribution_manager.config:
                 test_data = self.distribution_manager.filter_client_data(
                     self.id, test_data, self.num_classes, is_train=False

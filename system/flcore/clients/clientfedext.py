@@ -221,28 +221,33 @@ class clientFedEXT(Client):
     def receive_encoder(self, encoder_params):
         """Receive and update encoder parameters from server"""
         model = load_item(self.role, 'model', self.save_folder_name)
+        model.to(self.device)  # Ensure model is on correct device
         model.set_encoder_params(encoder_params)
         save_item(model, self.role, 'model', self.save_folder_name)
 
     def receive_classifier(self, classifier_params):
         """Receive and update classifier parameters from group aggregation"""
         model = load_item(self.role, 'model', self.save_folder_name)
+        model.to(self.device)  # Ensure model is on correct device
         model.set_classifier_params(classifier_params)
         save_item(model, self.role, 'model', self.save_folder_name)
 
     def get_encoder_params(self):
         """Get encoder parameters for aggregation"""
         model = load_item(self.role, 'model', self.save_folder_name)
+        model.to(self.device)  # Ensure model is on correct device
         return model.get_encoder_params()
 
     def get_classifier_params(self):
         """Get classifier parameters for group aggregation"""
         model = load_item(self.role, 'model', self.save_folder_name)
+        model.to(self.device)  # Ensure model is on correct device
         return model.get_classifier_params()
 
     def test_metrics(self):
         testloaderfull = self.load_test_data()
         model = load_item(self.role, 'model', self.save_folder_name)
+        model.to(self.device)  # CRITICAL: Move model to correct device!
         model.eval()
 
         test_acc = 0

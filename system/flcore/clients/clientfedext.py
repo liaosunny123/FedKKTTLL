@@ -25,8 +25,8 @@ class clientFedEXT(Client):
         self.num_classes = args.num_classes
 
         # Contrastive learning parameters
-        self.contrastive_weight = getattr(args, 'contrastive_weight', 0.0)  # Default to 0
-        self.temperature = getattr(args, 'contrastive_temperature', 0.5)
+        self.contrastive_weight = getattr(args, 'contrastive_weight', 0.1)  # Default to 0.1
+        self.temperature = getattr(args, 'contrastive_temperature', 0.07)  # Standard SupCon temperature
 
         # Dynamic learning rate for faster convergence
         self.initial_lr = self.learning_rate
@@ -155,8 +155,13 @@ class clientFedEXT(Client):
 
     def compute_contrastive_loss(self, features, labels):
         """
-        Simple contrastive loss for encoder feature alignment.
-        Uses basic approach to minimize interference with classification.
+        Supervised contrastive loss for better feature learning.
+        Uses temperature-scaled cross-entropy to create better feature representations.
+
+        This implementation is specifically designed for FedEXT to:
+        1. Learn discriminative features within each client
+        2. Create features that are more robust to aggregation
+        3. Work well even with non-IID data distributions
 
         Args:
             features: [batch_size, feature_dim] - encoder output features
@@ -171,36 +176,47 @@ class clientFedEXT(Client):
         if batch_size < 2 or self.contrastive_weight == 0:
             return torch.tensor(0.0, device=features.device, requires_grad=True)
 
-        # L2 normalize features
+        # L2 normalize features for cosine similarity
         features = F.normalize(features, dim=1)
 
-        # Simple approach: minimize variance within same class, maximize between different classes
-        unique_labels = torch.unique(labels)
-        if len(unique_labels) < 2:
-            # Only one class in batch, return zero loss
+        # Compute similarity matrix
+        similarity_matrix = torch.matmul(features, features.T)
+
+        # Apply temperature scaling
+        similarity_matrix = similarity_matrix / self.temperature
+
+        # Create mask for positive pairs (same class)
+        labels = labels.contiguous().view(-1, 1)
+        mask_positive = torch.eq(labels, labels.T).float().to(features.device)
+
+        # Remove diagonal (self-similarity)
+        diagonal_mask = torch.eye(batch_size, dtype=torch.bool, device=features.device)
+        mask_positive = mask_positive.masked_fill(diagonal_mask, 0)
+
+        # For numerical stability
+        logits_max, _ = torch.max(similarity_matrix, dim=1, keepdim=True)
+        logits = similarity_matrix - logits_max.detach()
+
+        # Compute log probabilities
+        exp_logits = torch.exp(logits)
+        exp_logits = exp_logits.masked_fill(diagonal_mask, 0)
+
+        # Sum of exponentials for normalization (excluding positives for each anchor)
+        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-6)
+
+        # Compute mean of log-likelihood over positive pairs
+        # Only consider samples that have at least one positive pair
+        mask_positive_sum = mask_positive.sum(dim=1)
+        valid_samples = mask_positive_sum > 0
+
+        if valid_samples.sum() == 0:
+            # No valid positive pairs in batch
             return torch.tensor(0.0, device=features.device, requires_grad=True)
 
-        loss = 0.0
-        num_pairs = 0
-
-        # For each pair of samples
-        for i in range(batch_size):
-            for j in range(i + 1, batch_size):
-                similarity = torch.dot(features[i], features[j])
-
-                if labels[i] == labels[j]:
-                    # Same class: encourage similarity (minimize 1 - similarity)
-                    loss += (1.0 - similarity)
-                else:
-                    # Different class: encourage dissimilarity (minimize similarity)
-                    loss += similarity
-
-                num_pairs += 1
-
-        if num_pairs > 0:
-            loss = loss / num_pairs
-        else:
-            loss = torch.tensor(0.0, device=features.device, requires_grad=True)
+        # Supervised contrastive loss
+        loss = -(mask_positive * log_prob).sum(dim=1)
+        loss = loss[valid_samples] / mask_positive_sum[valid_samples]
+        loss = loss.mean()
 
         return loss
 
@@ -228,7 +244,8 @@ class clientFedEXT(Client):
         # Only update encoder if we have valid parameters
         if encoder_params and len(encoder_params) > 0:
             # Move parameters to correct device
-            device_params = {k: v.to(self.device) for k, v in encoder_params.items()}
+            device_params = {k: v.to(self.device) if hasattr(v, 'to') else v
+                           for k, v in encoder_params.items()}
             model.set_encoder_params(device_params)
 
         save_item(model, self.role, 'model', self.save_folder_name)
@@ -241,7 +258,8 @@ class clientFedEXT(Client):
         # Only update classifier if we have valid parameters
         if classifier_params and len(classifier_params) > 0:
             # Move parameters to correct device
-            device_params = {k: v.to(self.device) for k, v in classifier_params.items()}
+            device_params = {k: v.to(self.device) if hasattr(v, 'to') else v
+                           for k, v in classifier_params.items()}
             model.set_classifier_params(device_params)
 
         save_item(model, self.role, 'model', self.save_folder_name)

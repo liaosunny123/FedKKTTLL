@@ -51,8 +51,8 @@ LAMBDA=0.01              # 正则化系数
 MU=1                   # 损失权重系数
 
 # FedEXT对比学习参数
-CONTRASTIVE_WEIGHT=0 # 对比学习损失权重 (设为0，完全关闭对比学习)
-CONTRASTIVE_TEMP=0.5     # 对比学习温度参数 (较大值使训练更稳定)
+CONTRASTIVE_WEIGHT=0.1  # 对比学习损失权重 (适度的权重，帮助学习更好的特征)
+CONTRASTIVE_TEMP=0.07    # 对比学习温度参数 (标准的SupCon温度值)
 
 # ETF Classifier配置
 USE_ETF=0               # 是否使用ETF分类器 (1=使用, 0=不使用)

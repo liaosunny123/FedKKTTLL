@@ -105,14 +105,34 @@ class FedEXT(Server):
                 self.aggregate_group_classifiers()
 
             # Send updated models back to ALL clients (not just selected)
-            # This ensures all clients stay synchronized
+            # Group-aware update: only update encoder for groups with overlapping data
             if i < self.global_rounds:  # Don't send in last round
                 for client in self.clients:
-                    if self.aggregated_encoder:
-                        client.receive_encoder(copy.deepcopy(self.aggregated_encoder))
                     group_id = self.groups.get(client.id, 0)
+
+                    # Always update classifier from group aggregation
                     if group_id in self.group_classifiers:
                         client.receive_classifier(copy.deepcopy(self.group_classifiers[group_id]))
+
+                    # For encoder: use weighted combination of global and local
+                    if self.aggregated_encoder:
+                        # Get client's current encoder for mixing
+                        model = load_item(client.role, 'model', client.save_folder_name)
+                        current_encoder = model.get_encoder_params()
+
+                        # Mix global and local encoder (keep more local for non-overlapping groups)
+                        mixed_encoder = {}
+                        # Groups 0 and 1 have no overlapping classes, so keep more local
+                        if group_id in [0, 1]:
+                            alpha = 0.3  # Take 30% from global, 70% from local
+                        else:
+                            alpha = 0.7  # Take 70% from global for IID client
+
+                        for key in self.aggregated_encoder.keys():
+                            mixed_encoder[key] = (alpha * self.aggregated_encoder[key] +
+                                                 (1 - alpha) * current_encoder[key].to(self.device))
+
+                        client.receive_encoder(copy.deepcopy(mixed_encoder))
 
             # In the last round, collect features and train server classifier
             if i == self.global_rounds:
@@ -210,25 +230,59 @@ class FedEXT(Server):
             self.uploaded_weights[i] = w / tot_samples
 
     def aggregate_encoders(self):
-        """Aggregate encoders using FedAvg across all clients"""
+        """Aggregate encoders within groups first, then global aggregation with group weights"""
         assert (len(self.uploaded_encoders) > 0)
 
-        print("\nAggregating encoders across all clients...")
+        print("\nAggregating encoders with group-aware strategy...")
 
-        # Initialize aggregated encoder parameters
+        # First, aggregate encoders within each group
+        group_encoders = {}
+        group_total_samples = {}
+
+        for i, (client_id, group_id, encoder) in enumerate(
+                zip(self.uploaded_ids, self.uploaded_groups, self.uploaded_encoders)):
+
+            if group_id not in group_encoders:
+                group_encoders[group_id] = {}
+                group_total_samples[group_id] = 0
+                for key in encoder.keys():
+                    group_encoders[group_id][key] = torch.zeros_like(encoder[key])
+
+            # Find client's sample count
+            client_samples = 0
+            for client in self.selected_clients:
+                if client.id == client_id:
+                    client_samples = client.train_samples
+                    break
+
+            # Add to group aggregation
+            for key in encoder.keys():
+                group_encoders[group_id][key] += encoder[key] * client_samples
+            group_total_samples[group_id] += client_samples
+
+        # Normalize group encoders
+        for group_id in group_encoders:
+            for key in group_encoders[group_id]:
+                group_encoders[group_id][key] /= group_total_samples[group_id]
+
+        # Global aggregation with group weights (weighted by total samples per group)
+        total_samples = sum(group_total_samples.values())
         aggregated_encoder = {}
-        for key in self.uploaded_encoders[0].keys():
-            aggregated_encoder[key] = torch.zeros_like(self.uploaded_encoders[0][key])
 
-        # Weighted average of all encoders
-        for w, encoder_params in zip(self.uploaded_weights, self.uploaded_encoders):
+        # Initialize with zeros
+        for key in list(group_encoders.values())[0].keys():
+            aggregated_encoder[key] = torch.zeros_like(list(group_encoders.values())[0][key])
+
+        # Weighted average across groups
+        for group_id, group_encoder in group_encoders.items():
+            group_weight = group_total_samples[group_id] / total_samples
             for key in aggregated_encoder.keys():
-                if key in encoder_params:
-                    aggregated_encoder[key] += encoder_params[key] * w
+                aggregated_encoder[key] += group_encoder[key] * group_weight
+            print(f"Group {group_id}: weight={group_weight:.3f}, samples={group_total_samples[group_id]}")
 
         # Store aggregated encoder
         self.aggregated_encoder = aggregated_encoder
-        print(f"Aggregated {len(self.uploaded_encoders)} client encoders")
+        print(f"Aggregated encoders from {len(group_encoders)} groups")
 
     def aggregate_group_classifiers(self):
         """Aggregate classifiers within each group"""

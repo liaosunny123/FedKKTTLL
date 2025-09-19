@@ -34,6 +34,7 @@ class FedEXT(Server):
         self.server_classifier = None  # Server's final classifier
         self.collected_features = []  # Store collected features from clients
         self.collected_labels = []  # Store collected labels from clients
+        self.aggregated_encoder = {}  # Store aggregated encoder parameters
 
         # Initialize client groups from distribution config
         self._initialize_groups()
@@ -96,13 +97,22 @@ class FedEXT(Server):
             self.receive_models()
 
             # Aggregate encoders (FedAvg style)
-            self.aggregate_encoders()
+            if len(self.uploaded_encoders) > 0:
+                self.aggregate_encoders()
 
             # Aggregate classifiers within groups
-            self.aggregate_group_classifiers()
+            if len(self.uploaded_classifiers) > 0:
+                self.aggregate_group_classifiers()
 
-            # Send updated models back to clients
-            self.send_aggregated_models()
+            # Send updated models back to ALL clients (not just selected)
+            # This ensures all clients stay synchronized
+            if i < self.global_rounds:  # Don't send in last round
+                for client in self.clients:
+                    if self.aggregated_encoder:
+                        client.receive_encoder(copy.deepcopy(self.aggregated_encoder))
+                    group_id = self.groups.get(client.id, 0)
+                    if group_id in self.group_classifiers:
+                        client.receive_classifier(copy.deepcopy(self.group_classifiers[group_id]))
 
             # In the last round, collect features and train server classifier
             if i == self.global_rounds:
@@ -149,8 +159,27 @@ class FedEXT(Server):
         self.save_results()
 
     def send_models(self):
-        """Initial model sending (if needed)"""
-        pass  # In FedEXT, we don't send global model initially
+        """Send initial models to selected clients"""
+        # For the first round, initialize aggregated encoder if empty
+        if not self.aggregated_encoder or len(self.aggregated_encoder) == 0:
+            # Get initial model from first client for initialization
+            sample_client = self.selected_clients[0]
+            model = load_item(sample_client.role, 'model', sample_client.save_folder_name)
+            model.to(self.device)
+            self.aggregated_encoder = model.get_encoder_params()
+
+            # Initialize group classifiers if not already initialized
+            if not self.group_classifiers:
+                for group_id in set(self.groups.values()):
+                    self.group_classifiers[group_id] = model.get_classifier_params()
+
+        # Send models to all selected clients
+        for client in self.selected_clients:
+            if self.aggregated_encoder:
+                client.receive_encoder(copy.deepcopy(self.aggregated_encoder))
+            group_id = self.groups.get(client.id, 0)
+            if group_id in self.group_classifiers:
+                client.receive_classifier(copy.deepcopy(self.group_classifiers[group_id]))
 
     def receive_models(self):
         """Receive encoder and classifier parameters from selected clients"""
@@ -208,21 +237,26 @@ class FedEXT(Server):
         # Group clients by their group ID
         group_classifiers_dict = defaultdict(list)
         group_weights_dict = defaultdict(list)
+        group_samples_dict = defaultdict(list)
 
-        for i, (group_id, classifier, weight) in enumerate(
-                zip(self.uploaded_groups, self.uploaded_classifiers, self.uploaded_weights)):
+        for i, (client_id, group_id, classifier) in enumerate(
+                zip(self.uploaded_ids, self.uploaded_groups, self.uploaded_classifiers)):
             group_classifiers_dict[group_id].append(classifier)
-            group_weights_dict[group_id].append(weight)
+            # Find the original sample count for this client
+            for client in self.selected_clients:
+                if client.id == client_id:
+                    group_samples_dict[group_id].append(client.train_samples)
+                    break
 
         # Aggregate classifiers for each group
         self.group_classifiers = {}
         for group_id in group_classifiers_dict.keys():
             classifiers = group_classifiers_dict[group_id]
-            weights = group_weights_dict[group_id]
+            samples = group_samples_dict[group_id]
 
-            # Normalize weights within group
-            total_weight = sum(weights)
-            normalized_weights = [w / total_weight for w in weights]
+            # Normalize weights within group based on samples
+            total_samples = sum(samples)
+            normalized_weights = [s / total_samples for s in samples]
 
             # Initialize aggregated classifier for this group
             aggregated_classifier = {}

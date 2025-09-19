@@ -25,8 +25,8 @@ class clientFedEXT(Client):
         self.num_classes = args.num_classes
 
         # Contrastive learning parameters
-        self.contrastive_weight = getattr(args, 'contrastive_weight', 0.1)
-        self.temperature = getattr(args, 'contrastive_temperature', 0.1)
+        self.contrastive_weight = getattr(args, 'contrastive_weight', 0.0)  # Default to 0
+        self.temperature = getattr(args, 'contrastive_temperature', 0.5)
 
         # Dynamic learning rate for faster convergence
         self.initial_lr = self.learning_rate
@@ -49,7 +49,7 @@ class clientFedEXT(Client):
         if self.learning_rate_decay:
             current_lr = self.learning_rate * (self.learning_rate_decay_gamma ** self.current_round)
 
-        # Use same learning rate for both (like FedAvg baseline)
+        # Use same optimizer settings as FedAvg for fair comparison
         encoder_optimizer = torch.optim.SGD(model.encoder.parameters(), lr=current_lr)
         classifier_optimizer = torch.optim.SGD(model.classifier.parameters(), lr=current_lr)
 
@@ -83,11 +83,13 @@ class clientFedEXT(Client):
                 # Classification loss
                 classification_loss = self.loss(output, y)
 
-                # Contrastive loss for encoder
-                contrastive_loss = self.compute_contrastive_loss(features, y)
-
-                # Total loss
-                total_loss = classification_loss + self.contrastive_weight * contrastive_loss
+                # Only add contrastive loss if weight > 0
+                if self.contrastive_weight > 0:
+                    contrastive_loss = self.compute_contrastive_loss(features, y)
+                    total_loss = classification_loss + self.contrastive_weight * contrastive_loss
+                else:
+                    contrastive_loss = torch.tensor(0.0, device=self.device)
+                    total_loss = classification_loss
 
                 batch_losses.append(total_loss.item())
                 epoch_classification_losses.append(classification_loss.item())
@@ -99,9 +101,9 @@ class clientFedEXT(Client):
 
                 total_loss.backward()
 
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(model.encoder.parameters(), 10)
-                torch.nn.utils.clip_grad_norm_(model.classifier.parameters(), 10)
+                # Gradient clipping (optional - can be disabled for simpler training)
+                # torch.nn.utils.clip_grad_norm_(model.encoder.parameters(), 10)
+                # torch.nn.utils.clip_grad_norm_(model.classifier.parameters(), 10)
 
                 # Update both encoder and classifier
                 encoder_optimizer.step()
@@ -222,14 +224,26 @@ class clientFedEXT(Client):
         """Receive and update encoder parameters from server"""
         model = load_item(self.role, 'model', self.save_folder_name)
         model.to(self.device)  # Ensure model is on correct device
-        model.set_encoder_params(encoder_params)
+
+        # Only update encoder if we have valid parameters
+        if encoder_params and len(encoder_params) > 0:
+            # Move parameters to correct device
+            device_params = {k: v.to(self.device) for k, v in encoder_params.items()}
+            model.set_encoder_params(device_params)
+
         save_item(model, self.role, 'model', self.save_folder_name)
 
     def receive_classifier(self, classifier_params):
         """Receive and update classifier parameters from group aggregation"""
         model = load_item(self.role, 'model', self.save_folder_name)
         model.to(self.device)  # Ensure model is on correct device
-        model.set_classifier_params(classifier_params)
+
+        # Only update classifier if we have valid parameters
+        if classifier_params and len(classifier_params) > 0:
+            # Move parameters to correct device
+            device_params = {k: v.to(self.device) for k, v in classifier_params.items()}
+            model.set_classifier_params(device_params)
+
         save_item(model, self.role, 'model', self.save_folder_name)
 
     def get_encoder_params(self):

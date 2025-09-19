@@ -13,11 +13,11 @@ DEVICE_ID=1               # GPU设备ID
 DATASET="Cifar10"         # 数据集 (Cifar10, MNIST, etc.)
 MODEL_FAMILY="HtM10"      # 模型族 (HtM10包含10种异构模型)
 IS_HOMOGENEITY_MODEL=1    # 是否使用同构模型 (1=所有客户端使用相同模型, 0=使用异构模型族)
-NUM_CLASSES=10            # 分类数量
+NUM_CLASSES=20            # 分类数量
 FEATURE_DIM=512           # 特征维度
 
 # 联邦学习参数
-NUM_CLIENTS=6            # 客户端总数
+NUM_CLIENTS=20            # 客户端总数
 JOIN_RATIO=1              # 每轮参与的客户端比例 (0.0-1.0)
 GLOBAL_ROUNDS=100         # 全局训练轮次
 
@@ -73,7 +73,7 @@ USE_WANDB=True
 # 数据分布配置文件（可选）
 # 取消注释以下行以使用特定的数据分布配置
 # DISTRIBUTION_CONFIG="../configs/distribution_fix_missing.json"
-DISTRIBUTION_CONFIG="../configs/distribution_missing_classes.json"
+DISTRIBUTION_CONFIG=""
 # DISTRIBUTION_CONFIG="../configs/distribution_dirichlet.json"
 
 # ========================================

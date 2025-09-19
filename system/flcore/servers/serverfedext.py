@@ -68,10 +68,16 @@ class FedEXT(Server):
 
             print(f"Loaded client groups from distribution config: {self.groups}")
         else:
-            # Default: all clients in one group
-            for client in self.clients:
-                self.groups[client.id] = 0
-            print(f"No distribution config found, all clients assigned to group 0")
+            for i in [0, 5, 10, 15]:
+                self.groups[i] = 0
+            for i in [1, 6, 11, 16]:
+                self.groups[i] = 1
+            for i in [2, 7, 12, 17]:
+                self.groups[i] = 2
+            for i in [3, 8, 13, 18]:
+                self.groups[i] = 3
+            for i in [4, 9, 14, 19]:
+                self.groups[i] = 4
 
     def train(self):
         # Initial evaluation

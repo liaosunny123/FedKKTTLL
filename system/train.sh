@@ -19,6 +19,7 @@ FEATURE_DIM=512           # 特征维度
 # 联邦学习参数
 NUM_CLIENTS=6            # 客户端总数
 JOIN_RATIO=1              # 每轮参与的客户端比例 (0.0-1.0)
+GLOBAL_ROUNDS=100         # 全局训练轮次
 
 # 本地训练参数
 LOCAL_LR=0.01            # 本地学习率
@@ -79,6 +80,7 @@ echo "数据集: $DATASET"
 echo "模型族: $MODEL_FAMILY"
 echo "同构模型: $IS_HOMOGENEITY_MODEL"
 echo "客户端数量: $NUM_CLIENTS"
+echo "全局轮次: $GLOBAL_ROUNDS"
 echo "算法: $ALGORITHM"
 echo "使用ETF分类器: $USE_ETF"
 echo "使用全局模型: $USE_GLOBAL_MODEL"
@@ -116,6 +118,7 @@ CMD="$CMD -t $TIMES"
 CMD="$CMD -ab $AUTO_BREAK"
 CMD="$CMD -lr $LOCAL_LR"
 CMD="$CMD -jr $JOIN_RATIO"
+CMD="$CMD -gr $GLOBAL_ROUNDS"
 CMD="$CMD -lbs $LOCAL_BATCH_SIZE"
 CMD="$CMD -ls $LOCAL_EPOCHS"
 CMD="$CMD -nc $NUM_CLIENTS"

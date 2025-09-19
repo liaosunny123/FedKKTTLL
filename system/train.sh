@@ -5,7 +5,7 @@
 # ========================================
 
 # 基础实验设置
-TIMES=3                    # 实验运行次数
+TIMES=1                    # 实验运行次数
 AUTO_BREAK=1              # 自动停止 (1=True, 0=False)
 DEVICE_ID=1               # GPU设备ID
 
@@ -17,13 +17,13 @@ NUM_CLASSES=10            # 分类数量
 FEATURE_DIM=512           # 特征维度
 
 # 联邦学习参数
-NUM_CLIENTS=3            # 客户端总数
+NUM_CLIENTS=6            # 客户端总数
 JOIN_RATIO=1              # 每轮参与的客户端比例 (0.0-1.0)
 
 # 本地训练参数
 LOCAL_LR=0.01            # 本地学习率
 LOCAL_BATCH_SIZE=10      # 本地批次大小
-LOCAL_EPOCHS=1           # 本地训练轮次
+LOCAL_EPOCHS=5           # 本地训练轮次
 
 # 算法配置
 # 可选算法：FedAvg, FedEXT, FedKTL-stylegan-3, FedKTL-stylegan-xl, FedKTL-stable-diffusion
@@ -41,7 +41,7 @@ GENERATOR_PATH=""
 # 服务器端参数
 SERVER_LR=0.1            # 服务器学习率
 SERVER_BATCH_SIZE=100    # 服务器批次大小
-SERVER_EPOCHS=100        # 服务器训练轮次
+SERVER_EPOCHS=50        # 服务器训练轮次
 
 # 算法调优参数
 LAMBDA=0.01              # 正则化系数

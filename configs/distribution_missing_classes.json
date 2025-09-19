@@ -1,32 +1,32 @@
 {
   "0": {
     "classes": [3, 4, 5, 7],
-    "max_samples": 2000,
+    "max_samples": 500,
     "group": 0
   },
   "1": {
     "classes": [3, 4, 5, 7],
     "group": 0,
-    "max_samples": 2000
+    "max_samples": 500
   },
   "2": {
     "classes": [3, 4, 5, 7],
-    "max_samples": 2000,
+    "max_samples": 500,
     "group": 0
   },
   "3": {
     "classes": [0, 1, 2, 6, 8, 9],
     "group": 1,
-    "max_samples": 2000
+    "max_samples": 500
   },
   "4": {
     "classes": [0, 1, 2, 6, 8, 9],
-    "max_samples": 2000,
+    "max_samples": 500,
     "group": 1
   },
   "5": {
     "iid": true,
-    "samples": 2000,
+    "samples": 500,
     "group": 2
   }
 }

@@ -45,7 +45,7 @@ SERVER_EPOCHS=50        # 服务器训练轮次
 
 # 算法调优参数
 LAMBDA=0.01              # 正则化系数
-MU=100                   # 损失权重系数
+MU=1                   # 损失权重系数
 
 # ETF Classifier配置
 USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)

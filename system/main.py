@@ -224,6 +224,11 @@ if __name__ == "__main__":
     # data distribution
     parser.add_argument('-dc', "--distribution_config", type=str, default=None,
                         help="Path to JSON file defining client data distribution")
+    # FedEXT contrastive learning
+    parser.add_argument('-cw', "--contrastive_weight", type=float, default=0.1,
+                        help="Weight for contrastive loss in FedEXT (0.0=disable, 0.1=recommended)")
+    parser.add_argument('-ct', "--contrastive_temperature", type=float, default=0.1,
+                        help="Temperature parameter for contrastive learning (smaller=sharper)")
 
 
     args = parser.parse_args()

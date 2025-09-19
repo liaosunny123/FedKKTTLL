@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import time
 from flcore.clients.clientbase import Client, load_item, save_item
@@ -22,6 +23,10 @@ class clientFedEXT(Client):
         self.group_id = None  # Will be set based on distribution config
         self.feature_dim = args.feature_dim
         self.num_classes = args.num_classes
+
+        # Contrastive learning parameters
+        self.contrastive_weight = getattr(args, 'contrastive_weight', 0.1)
+        self.temperature = getattr(args, 'contrastive_temperature', 0.1)
 
     def set_group(self, group_id):
         """Set the group ID for this client"""
@@ -65,15 +70,26 @@ class clientFedEXT(Client):
                 if self.train_slow:
                     time.sleep(0.1 * np.abs(np.random.rand()))
 
+                # Forward pass
                 output = model(x)
-                loss = self.loss(output, y)
-                batch_losses.append(loss.item())
+                features = model.encoder(x)
+
+                # Classification loss
+                classification_loss = self.loss(output, y)
+
+                # Contrastive loss for encoder
+                contrastive_loss = self.compute_contrastive_loss(features, y)
+
+                # Total loss
+                total_loss = classification_loss + self.contrastive_weight * contrastive_loss
+
+                batch_losses.append(total_loss.item())
 
                 # Zero gradients for both optimizers
                 encoder_optimizer.zero_grad()
                 classifier_optimizer.zero_grad()
 
-                loss.backward()
+                total_loss.backward()
 
                 # Gradient clipping
                 torch.nn.utils.clip_grad_norm_(model.encoder.parameters(), 10)
@@ -93,6 +109,8 @@ class clientFedEXT(Client):
                     global_step = self.current_round * 1000 + epoch
                     wandb.log({
                         f"Client_{self.id}/epoch_loss": epoch_loss,
+                        f"Client_{self.id}/classification_loss": classification_loss.item() if 'classification_loss' in locals() else 0,
+                        f"Client_{self.id}/contrastive_loss": contrastive_loss.item() if 'contrastive_loss' in locals() else 0,
                         f"Client_{self.id}/learning_rate": current_lr,
                         f"Client_{self.id}/round": self.current_round,
                         f"Client_{self.id}/local_epoch": epoch,
@@ -122,6 +140,72 @@ class clientFedEXT(Client):
             print(f"Client {self.id} (Group {self.group_id}): Trained on {len(trainloader.dataset.indices)} samples")
         else:
             print(f"Client {self.id} (Group {self.group_id}): Training completed")
+
+    def compute_contrastive_loss(self, features, labels):
+        """
+        Compute contrastive loss for encoder feature alignment
+        Minimizes distance between same-class samples, maximizes distance between different-class samples
+
+        Args:
+            features: [batch_size, feature_dim] - encoder output features
+            labels: [batch_size] - class labels
+
+        Returns:
+            contrastive_loss: scalar tensor
+        """
+        batch_size = features.shape[0]
+
+        # Skip contrastive loss if batch size too small
+        if batch_size < 2:
+            return torch.tensor(0.0, device=features.device)
+
+        # L2 normalize features
+        features = F.normalize(features, dim=1)
+
+        # Compute pairwise cosine similarities
+        similarity_matrix = torch.matmul(features, features.T) / self.temperature
+
+        # Create positive and negative masks
+        labels = labels.unsqueeze(1)
+        positive_mask = (labels == labels.T).float()
+        negative_mask = (labels != labels.T).float()
+
+        # Remove self-similarities (diagonal)
+        identity_mask = torch.eye(batch_size, device=features.device)
+        positive_mask = positive_mask - identity_mask
+
+        # InfoNCE-style contrastive loss
+        loss = 0.0
+        num_positive_pairs = 0
+
+        for i in range(batch_size):
+            # Check if there are positive pairs for this sample
+            positive_indices = positive_mask[i] > 0
+            if positive_indices.sum() == 0:
+                continue
+
+            # Positive similarities (same class)
+            positive_similarities = similarity_matrix[i][positive_indices]
+
+            # All similarities except self
+            all_similarities = torch.cat([
+                similarity_matrix[i][:i],
+                similarity_matrix[i][i+1:]
+            ])
+
+            # For each positive pair, compute InfoNCE loss
+            for pos_sim in positive_similarities:
+                numerator = torch.exp(pos_sim)
+                denominator = torch.exp(all_similarities).sum()
+                loss += -torch.log(numerator / (denominator + 1e-8))
+                num_positive_pairs += 1
+
+        if num_positive_pairs > 0:
+            loss = loss / num_positive_pairs
+        else:
+            loss = torch.tensor(0.0, device=features.device)
+
+        return loss
 
     def extract_features_labels(self):
         """

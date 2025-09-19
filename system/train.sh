@@ -48,6 +48,10 @@ SERVER_EPOCHS=50        # 服务器训练轮次
 LAMBDA=0.01              # 正则化系数
 MU=1                   # 损失权重系数
 
+# FedEXT对比学习参数
+CONTRASTIVE_WEIGHT=0.1   # 对比学习损失权重 (0.0=关闭对比学习, 0.1=推荐值)
+CONTRASTIVE_TEMP=0.1     # 对比学习温度参数 (较小值使相似度计算更尖锐)
+
 # ETF Classifier配置
 USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)
 
@@ -93,6 +97,10 @@ if [[ "$ALGORITHM" == "FedKTL-"* ]]; then
 fi
 if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
     echo "数据分布配置: $DISTRIBUTION_CONFIG"
+fi
+if [ "$ALGORITHM" == "FedEXT" ]; then
+    echo "对比学习权重: $CONTRASTIVE_WEIGHT"
+    echo "对比学习温度: $CONTRASTIVE_TEMP"
 fi
 echo "========================================="
 
@@ -146,6 +154,12 @@ fi
 # 添加数据分布配置（如果存在）
 if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
     CMD="$CMD -dc $DISTRIBUTION_CONFIG"
+fi
+
+# 添加FedEXT对比学习参数（仅在使用FedEXT时）
+if [ "$ALGORITHM" == "FedEXT" ]; then
+    CMD="$CMD -cw $CONTRASTIVE_WEIGHT"
+    CMD="$CMD -ct $CONTRASTIVE_TEMP"
 fi
 
 # 执行命令

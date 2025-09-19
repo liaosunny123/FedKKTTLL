@@ -44,26 +44,14 @@ class clientFedEXT(Client):
         # Update current round
         self.current_round += 1
 
-        # Dynamic learning rate with warmup and decay
-        if self.current_round <= self.warmup_rounds:
-            # Warmup phase: gradually increase LR
-            warmup_factor = self.current_round / self.warmup_rounds
-            current_lr = self.initial_lr * (0.1 + 0.9 * warmup_factor)
-        else:
-            # Normal decay after warmup
-            current_lr = self.learning_rate
-            if self.learning_rate_decay:
-                decay_rounds = self.current_round - self.warmup_rounds
-                current_lr = self.learning_rate * (self.learning_rate_decay_gamma ** decay_rounds)
+        # Simple learning rate strategy (same as FedAvg)
+        current_lr = self.learning_rate
+        if self.learning_rate_decay:
+            current_lr = self.learning_rate * (self.learning_rate_decay_gamma ** self.current_round)
 
-        # Create separate optimizers with different learning rates
-        # Encoder: slower LR for stable global feature learning
-        # Classifier: faster LR for quick domain adaptation
-        encoder_lr = current_lr * 0.8  # Slower for encoder
-        classifier_lr = current_lr * 1.2  # Faster for classifier
-
-        encoder_optimizer = torch.optim.SGD(model.encoder.parameters(), lr=encoder_lr, momentum=0.9)
-        classifier_optimizer = torch.optim.SGD(model.classifier.parameters(), lr=classifier_lr, momentum=0.9)
+        # Use same learning rate for both (like FedAvg baseline)
+        encoder_optimizer = torch.optim.SGD(model.encoder.parameters(), lr=current_lr)
+        classifier_optimizer = torch.optim.SGD(model.classifier.parameters(), lr=current_lr)
 
         model.train()
 
@@ -165,12 +153,8 @@ class clientFedEXT(Client):
 
     def compute_contrastive_loss(self, features, labels):
         """
-        Compute enhanced contrastive loss for encoder feature alignment.
-
-        This implementation:
-        1. Uses simplified supervised contrastive learning
-        2. Handles small batch sizes gracefully
-        3. Focuses on inter-class separation for better global features
+        Simple contrastive loss for encoder feature alignment.
+        Uses basic approach to minimize interference with classification.
 
         Args:
             features: [batch_size, feature_dim] - encoder output features
@@ -181,62 +165,40 @@ class clientFedEXT(Client):
         """
         batch_size = features.shape[0]
 
-        # Skip contrastive loss if batch size too small
-        if batch_size < 2:
-            return torch.tensor(0.0, device=features.device)
+        # Skip if too small or contrastive weight is 0
+        if batch_size < 2 or self.contrastive_weight == 0:
+            return torch.tensor(0.0, device=features.device, requires_grad=True)
 
-        # L2 normalize features for cosine similarity
+        # L2 normalize features
         features = F.normalize(features, dim=1)
 
-        # Compute pairwise cosine similarities
-        similarity_matrix = torch.matmul(features, features.T) / self.temperature
-
-        # Create masks
-        labels = labels.unsqueeze(1)
-        positive_mask = (labels == labels.T).float()
-        negative_mask = (labels != labels.T).float()
-
-        # Remove diagonal (self-similarities)
-        identity_mask = torch.eye(batch_size, device=features.device)
-        positive_mask = positive_mask - identity_mask
-
-        # Simplified supervised contrastive loss
-        # Focus on maximizing separation between different classes
+        # Simple approach: minimize variance within same class, maximize between different classes
+        unique_labels = torch.unique(labels)
+        if len(unique_labels) < 2:
+            # Only one class in batch, return zero loss
+            return torch.tensor(0.0, device=features.device, requires_grad=True)
 
         loss = 0.0
-        valid_samples = 0
+        num_pairs = 0
 
+        # For each pair of samples
         for i in range(batch_size):
-            # Get positive and negative similarities for sample i
-            pos_similarities = similarity_matrix[i] * positive_mask[i]
-            neg_similarities = similarity_matrix[i] * negative_mask[i]
+            for j in range(i + 1, batch_size):
+                similarity = torch.dot(features[i], features[j])
 
-            # Check if we have both positive and negative pairs
-            num_positives = positive_mask[i].sum()
-            num_negatives = negative_mask[i].sum()
+                if labels[i] == labels[j]:
+                    # Same class: encourage similarity (minimize 1 - similarity)
+                    loss += (1.0 - similarity)
+                else:
+                    # Different class: encourage dissimilarity (minimize similarity)
+                    loss += similarity
 
-            if num_positives > 0 and num_negatives > 0:
-                # Average positive similarity (should be high)
-                avg_pos_sim = pos_similarities.sum() / num_positives
+                num_pairs += 1
 
-                # Average negative similarity (should be low)
-                avg_neg_sim = neg_similarities.sum() / num_negatives
-
-                # Contrastive loss: minimize negative similarities, maximize positive
-                sample_loss = -avg_pos_sim + avg_neg_sim
-                loss += sample_loss
-                valid_samples += 1
-
-            elif num_negatives > 0:
-                # Only negative pairs available - focus on separation
-                avg_neg_sim = neg_similarities.sum() / num_negatives
-                loss += avg_neg_sim  # Minimize negative similarities
-                valid_samples += 1
-
-        if valid_samples > 0:
-            loss = loss / valid_samples
+        if num_pairs > 0:
+            loss = loss / num_pairs
         else:
-            loss = torch.tensor(0.0, device=features.device)
+            loss = torch.tensor(0.0, device=features.device, requires_grad=True)
 
         return loss
 

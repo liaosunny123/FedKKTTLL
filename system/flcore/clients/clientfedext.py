@@ -28,6 +28,10 @@ class clientFedEXT(Client):
         self.contrastive_weight = getattr(args, 'contrastive_weight', 0.1)
         self.temperature = getattr(args, 'contrastive_temperature', 0.1)
 
+        # Dynamic learning rate for faster convergence
+        self.initial_lr = self.learning_rate
+        self.warmup_rounds = 5  # Warm up for first 5 rounds
+
     def set_group(self, group_id):
         """Set the group ID for this client"""
         self.group_id = group_id
@@ -40,14 +44,26 @@ class clientFedEXT(Client):
         # Update current round
         self.current_round += 1
 
-        # Apply learning rate decay
-        current_lr = self.learning_rate
-        if self.learning_rate_decay:
-            current_lr = self.learning_rate * (self.learning_rate_decay_gamma ** self.current_round)
+        # Dynamic learning rate with warmup and decay
+        if self.current_round <= self.warmup_rounds:
+            # Warmup phase: gradually increase LR
+            warmup_factor = self.current_round / self.warmup_rounds
+            current_lr = self.initial_lr * (0.1 + 0.9 * warmup_factor)
+        else:
+            # Normal decay after warmup
+            current_lr = self.learning_rate
+            if self.learning_rate_decay:
+                decay_rounds = self.current_round - self.warmup_rounds
+                current_lr = self.learning_rate * (self.learning_rate_decay_gamma ** decay_rounds)
 
-        # Create separate optimizers for encoder and classifier
-        encoder_optimizer = torch.optim.SGD(model.encoder.parameters(), lr=current_lr)
-        classifier_optimizer = torch.optim.SGD(model.classifier.parameters(), lr=current_lr)
+        # Create separate optimizers with different learning rates
+        # Encoder: slower LR for stable global feature learning
+        # Classifier: faster LR for quick domain adaptation
+        encoder_lr = current_lr * 0.8  # Slower for encoder
+        classifier_lr = current_lr * 1.2  # Faster for classifier
+
+        encoder_optimizer = torch.optim.SGD(model.encoder.parameters(), lr=encoder_lr, momentum=0.9)
+        classifier_optimizer = torch.optim.SGD(model.classifier.parameters(), lr=classifier_lr, momentum=0.9)
 
         model.train()
 
@@ -60,6 +76,8 @@ class clientFedEXT(Client):
         epoch_losses = []
         for epoch in range(max_local_epochs):
             batch_losses = []
+            epoch_classification_losses = []
+            epoch_contrastive_losses = []
             for i, (x, y) in enumerate(trainloader):
                 if type(x) == type([]):
                     x[0] = x[0].to(self.device)
@@ -84,6 +102,8 @@ class clientFedEXT(Client):
                 total_loss = classification_loss + self.contrastive_weight * contrastive_loss
 
                 batch_losses.append(total_loss.item())
+                epoch_classification_losses.append(classification_loss.item())
+                epoch_contrastive_losses.append(contrastive_loss.item())
 
                 # Zero gradients for both optimizers
                 encoder_optimizer.zero_grad()
@@ -107,10 +127,12 @@ class clientFedEXT(Client):
                 # Log epoch metrics to wandb
                 if self.use_wandb:
                     global_step = self.current_round * 1000 + epoch
+                    avg_classification_loss = sum(epoch_classification_losses) / len(epoch_classification_losses) if epoch_classification_losses else 0
+                    avg_contrastive_loss = sum(epoch_contrastive_losses) / len(epoch_contrastive_losses) if epoch_contrastive_losses else 0
                     wandb.log({
                         f"Client_{self.id}/epoch_loss": epoch_loss,
-                        f"Client_{self.id}/classification_loss": classification_loss.item() if 'classification_loss' in locals() else 0,
-                        f"Client_{self.id}/contrastive_loss": contrastive_loss.item() if 'contrastive_loss' in locals() else 0,
+                        f"Client_{self.id}/classification_loss": avg_classification_loss,
+                        f"Client_{self.id}/contrastive_loss": avg_contrastive_loss,
                         f"Client_{self.id}/learning_rate": current_lr,
                         f"Client_{self.id}/round": self.current_round,
                         f"Client_{self.id}/local_epoch": epoch,
@@ -143,8 +165,12 @@ class clientFedEXT(Client):
 
     def compute_contrastive_loss(self, features, labels):
         """
-        Compute contrastive loss for encoder feature alignment
-        Minimizes distance between same-class samples, maximizes distance between different-class samples
+        Compute enhanced contrastive loss for encoder feature alignment.
+
+        This implementation:
+        1. Uses simplified supervised contrastive learning
+        2. Handles small batch sizes gracefully
+        3. Focuses on inter-class separation for better global features
 
         Args:
             features: [batch_size, feature_dim] - encoder output features
@@ -159,49 +185,56 @@ class clientFedEXT(Client):
         if batch_size < 2:
             return torch.tensor(0.0, device=features.device)
 
-        # L2 normalize features
+        # L2 normalize features for cosine similarity
         features = F.normalize(features, dim=1)
 
         # Compute pairwise cosine similarities
         similarity_matrix = torch.matmul(features, features.T) / self.temperature
 
-        # Create positive and negative masks
+        # Create masks
         labels = labels.unsqueeze(1)
         positive_mask = (labels == labels.T).float()
         negative_mask = (labels != labels.T).float()
 
-        # Remove self-similarities (diagonal)
+        # Remove diagonal (self-similarities)
         identity_mask = torch.eye(batch_size, device=features.device)
         positive_mask = positive_mask - identity_mask
 
-        # InfoNCE-style contrastive loss
+        # Simplified supervised contrastive loss
+        # Focus on maximizing separation between different classes
+
         loss = 0.0
-        num_positive_pairs = 0
+        valid_samples = 0
 
         for i in range(batch_size):
-            # Check if there are positive pairs for this sample
-            positive_indices = positive_mask[i] > 0
-            if positive_indices.sum() == 0:
-                continue
+            # Get positive and negative similarities for sample i
+            pos_similarities = similarity_matrix[i] * positive_mask[i]
+            neg_similarities = similarity_matrix[i] * negative_mask[i]
 
-            # Positive similarities (same class)
-            positive_similarities = similarity_matrix[i][positive_indices]
+            # Check if we have both positive and negative pairs
+            num_positives = positive_mask[i].sum()
+            num_negatives = negative_mask[i].sum()
 
-            # All similarities except self
-            all_similarities = torch.cat([
-                similarity_matrix[i][:i],
-                similarity_matrix[i][i+1:]
-            ])
+            if num_positives > 0 and num_negatives > 0:
+                # Average positive similarity (should be high)
+                avg_pos_sim = pos_similarities.sum() / num_positives
 
-            # For each positive pair, compute InfoNCE loss
-            for pos_sim in positive_similarities:
-                numerator = torch.exp(pos_sim)
-                denominator = torch.exp(all_similarities).sum()
-                loss += -torch.log(numerator / (denominator + 1e-8))
-                num_positive_pairs += 1
+                # Average negative similarity (should be low)
+                avg_neg_sim = neg_similarities.sum() / num_negatives
 
-        if num_positive_pairs > 0:
-            loss = loss / num_positive_pairs
+                # Contrastive loss: minimize negative similarities, maximize positive
+                sample_loss = -avg_pos_sim + avg_neg_sim
+                loss += sample_loss
+                valid_samples += 1
+
+            elif num_negatives > 0:
+                # Only negative pairs available - focus on separation
+                avg_neg_sim = neg_similarities.sum() / num_negatives
+                loss += avg_neg_sim  # Minimize negative similarities
+                valid_samples += 1
+
+        if valid_samples > 0:
+            loss = loss / valid_samples
         else:
             loss = torch.tensor(0.0, device=features.device)
 

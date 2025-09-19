@@ -22,9 +22,11 @@ JOIN_RATIO=1              # 每轮参与的客户端比例 (0.0-1.0)
 GLOBAL_ROUNDS=100         # 全局训练轮次
 
 # 本地训练参数
-LOCAL_LR=0.01            # 本地学习率
-LOCAL_BATCH_SIZE=10      # 本地批次大小
-LOCAL_EPOCHS=5           # 本地训练轮次
+LOCAL_LR=0.01            # 本地学习率 (基础学习率)
+LOCAL_BATCH_SIZE=32      # 本地批次大小 (增加batch size便于对比学习)
+LOCAL_EPOCHS=8           # 本地训练轮次 (平衡训练效果和通信效率)
+LR_DECAY=true            # 启用学习率衰减
+LR_DECAY_GAMMA=0.995     # 学习率衰减系数
 
 # 算法配置
 # 可选算法：FedAvg, FedEXT, FedKTL-stylegan-3, FedKTL-stylegan-xl, FedKTL-stable-diffusion
@@ -49,11 +51,11 @@ LAMBDA=0.01              # 正则化系数
 MU=1                   # 损失权重系数
 
 # FedEXT对比学习参数
-CONTRASTIVE_WEIGHT=0.1   # 对比学习损失权重 (0.0=关闭对比学习, 0.1=推荐值)
-CONTRASTIVE_TEMP=0.1     # 对比学习温度参数 (较小值使相似度计算更尖锐)
+CONTRASTIVE_WEIGHT=0.1   # 对比学习损失权重 (帮助encoder学习更好的特征表示)
+CONTRASTIVE_TEMP=0.2     # 对比学习温度参数 (较小值使相似度更尖锐)
 
 # ETF Classifier配置
-USE_ETF=1                # 是否使用ETF分类器 (1=使用, 0=不使用)
+USE_ETF=0               # 是否使用ETF分类器 (1=使用, 0=不使用)
 
 # 全局模型配置
 # FedAvg: 全局模型用于参数聚合
@@ -101,6 +103,7 @@ fi
 if [ "$ALGORITHM" == "FedEXT" ]; then
     echo "对比学习权重: $CONTRASTIVE_WEIGHT"
     echo "对比学习温度: $CONTRASTIVE_TEMP"
+    echo "学习率衰减: $LR_DECAY (gamma: $LR_DECAY_GAMMA)"
 fi
 echo "========================================="
 
@@ -125,6 +128,8 @@ CMD="TORCH_CUDA_ARCH_LIST='8.0;8.6;8.9' HF_ENDPOINT=https://hf-mirror.com IS_GLO
 CMD="$CMD -t $TIMES"
 CMD="$CMD -ab $AUTO_BREAK"
 CMD="$CMD -lr $LOCAL_LR"
+CMD="$CMD -ld $LR_DECAY"
+CMD="$CMD -ldg $LR_DECAY_GAMMA"
 CMD="$CMD -jr $JOIN_RATIO"
 CMD="$CMD -gr $GLOBAL_ROUNDS"
 CMD="$CMD -lbs $LOCAL_BATCH_SIZE"

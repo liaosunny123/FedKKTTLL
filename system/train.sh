@@ -41,18 +41,16 @@ ALGORITHM="FedEXT"  # 联邦学习算法
 #GENERATOR_PATH="stylegan/stylegan-xl-models/stylegan_xl-afhqv2-512x512.pkl"
 GENERATOR_PATH=""
 
-# 服务器端参数
-SERVER_LR=0.1            # 服务器学习率
-SERVER_BATCH_SIZE=100    # 服务器批次大小
-SERVER_EPOCHS=50        # 服务器训练轮次
 
 # 算法调优参数
 LAMBDA=0.01              # 正则化系数
 MU=1                   # 损失权重系数
 
-# FedEXT对比学习参数
-CONTRASTIVE_WEIGHT=0.1  # 对比学习损失权重 (适度的权重，帮助学习更好的特征)
-CONTRASTIVE_TEMP=0.07    # 对比学习温度参数 (标准的SupCon温度值)
+# FedEXT参数
+ENCODER_RATIO=0.7       # Encoder层数比例 (0.7表示70%层作为Encoder，30%作为Classifier)
+SERVER_LR=0.01          # Server classifier学习率
+SERVER_BATCH_SIZE=32    # Server classifier batch size
+SERVER_EPOCHS=20        # Server classifier训练轮次
 
 # ETF Classifier配置
 USE_ETF=0               # 是否使用ETF分类器 (1=使用, 0=不使用)
@@ -101,8 +99,10 @@ if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
     echo "数据分布配置: $DISTRIBUTION_CONFIG"
 fi
 if [ "$ALGORITHM" == "FedEXT" ]; then
-    echo "对比学习权重: $CONTRASTIVE_WEIGHT"
-    echo "对比学习温度: $CONTRASTIVE_TEMP"
+    echo "Encoder比例: $ENCODER_RATIO"
+    echo "Server学习率: $SERVER_LR"
+    echo "Server批次大小: $SERVER_BATCH_SIZE"
+    echo "Server训练轮次: $SERVER_EPOCHS"
     echo "学习率衰减: $LR_DECAY (gamma: $LR_DECAY_GAMMA)"
 fi
 echo "========================================="
@@ -142,9 +142,6 @@ CMD="$CMD -hm $IS_HOMOGENEITY_MODEL"
 CMD="$CMD -fd $FEATURE_DIM"
 CMD="$CMD -did $DEVICE_ID"
 CMD="$CMD -algo $ALGORITHM"
-CMD="$CMD -slr $SERVER_LR"
-CMD="$CMD -sbs $SERVER_BATCH_SIZE"
-CMD="$CMD -se $SERVER_EPOCHS"
 CMD="$CMD -lam $LAMBDA"
 CMD="$CMD -mu $MU"
 CMD="$CMD -wb $USE_WANDB"
@@ -161,10 +158,12 @@ if [ ! -z "$DISTRIBUTION_CONFIG" ]; then
     CMD="$CMD -dc $DISTRIBUTION_CONFIG"
 fi
 
-# 添加FedEXT对比学习参数（仅在使用FedEXT时）
+# 添加FedEXT参数（仅在使用FedEXT时）
 if [ "$ALGORITHM" == "FedEXT" ]; then
-    CMD="$CMD -cw $CONTRASTIVE_WEIGHT"
-    CMD="$CMD -ct $CONTRASTIVE_TEMP"
+    CMD="$CMD -er $ENCODER_RATIO"
+    CMD="$CMD -slr $SERVER_LR"
+    CMD="$CMD -sbs $SERVER_BATCH_SIZE"
+    CMD="$CMD -se $SERVER_EPOCHS"
 fi
 
 # 执行命令

@@ -3,8 +3,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import copy
-import json
-import os
 from flcore.servers.serverbase import Server
 from flcore.clients.clientfedext import clientFedEXT
 from flcore.clients.clientbase import load_item, save_item
@@ -31,12 +29,10 @@ class FedEXT(Server):
         # FedEXT specific attributes
         self.groups = {}  # Dictionary to store client groups
         self.group_classifiers = {}  # Store group-level classifiers
+        self.global_encoder = None  # Global encoder (FedAvg style)
         self.server_classifier = None  # Server's final classifier
-        self.collected_features = []  # Store collected features from clients
-        self.collected_labels = []  # Store collected labels from clients
-        self.aggregated_encoder = {}  # Store aggregated encoder parameters
 
-        # Initialize client groups from distribution config
+        # Initialize client groups
         self._initialize_groups()
 
         # Initialize models
@@ -48,36 +44,34 @@ class FedEXT(Server):
 
                 # Set client's group
                 if client.id in self.groups:
-                    group_id = self.groups[client.id]
-                    client.set_group(group_id)
+                    client.set_group(self.groups[client.id])
+
+            # Initialize global encoder and group classifiers
+            sample_model = FedEXTModel(args, 0).to(self.device)
+            self.global_encoder = copy.deepcopy(sample_model.encoder.state_dict())
+            save_item(self.global_encoder, self.role, 'global_encoder', self.save_folder_name)
+
+            # Initialize group classifiers
+            for group_id in set(self.groups.values()):
+                self.group_classifiers[group_id] = copy.deepcopy(sample_model.classifier.state_dict())
+                save_item(self.group_classifiers[group_id], self.role, f'group_classifier_{group_id}', self.save_folder_name)
 
         print(f"Client groups: {self.groups}")
+        print(f"Encoder ratio: {getattr(args, 'encoder_ratio', 0.7)}")
 
     def _initialize_groups(self):
-        """Initialize client groups from distribution config"""
-        if self.args.distribution_config and os.path.exists(self.args.distribution_config):
-            with open(self.args.distribution_config, 'r') as f:
-                config = json.load(f)
-
-            for client_id, client_config in config.items():
-                if 'group' in client_config:
-                    self.groups[int(client_id)] = client_config['group']
-                else:
-                    # Default group assignment if not specified
-                    self.groups[int(client_id)] = 0
-
-            print(f"Loaded client groups from distribution config: {self.groups}")
-        else:
-            for i in [0, 5, 10, 15]:
-                self.groups[i] = 0
-            for i in [1, 6, 11, 16]:
-                self.groups[i] = 1
-            for i in [2, 7, 12, 17]:
-                self.groups[i] = 2
-            for i in [3, 8, 13, 18]:
-                self.groups[i] = 3
-            for i in [4, 9, 14, 19]:
-                self.groups[i] = 4
+        """Initialize client groups based on predefined assignment"""
+        # Groups 0-4 with 4 clients each
+        for i in [0, 5, 10, 15]:
+            self.groups[i] = 0
+        for i in [1, 6, 11, 16]:
+            self.groups[i] = 1
+        for i in [2, 7, 12, 17]:
+            self.groups[i] = 2
+        for i in [3, 8, 13, 18]:
+            self.groups[i] = 3
+        for i in [4, 9, 14, 19]:
+            self.groups[i] = 4
 
     def train(self):
         # Initial evaluation
@@ -90,6 +84,8 @@ class FedEXT(Server):
         for i in range(1, self.global_rounds + 1):
             s_t = time.time()
             self.selected_clients = self.select_clients()
+
+            # Send global encoder and group classifiers to selected clients
             self.send_models()
 
             print(f"\n-------------Round number: {i}-------------")
@@ -99,10 +95,10 @@ class FedEXT(Server):
             for client in self.selected_clients:
                 client.train()
 
-            # Receive and aggregate models
+            # Receive models from clients
             self.receive_models()
 
-            # Aggregate encoders (FedAvg style)
+            # Aggregate encoders globally (FedAvg style)
             if len(self.uploaded_encoders) > 0:
                 self.aggregate_encoders()
 
@@ -110,41 +106,10 @@ class FedEXT(Server):
             if len(self.uploaded_classifiers) > 0:
                 self.aggregate_group_classifiers()
 
-            # Send updated models back to ALL clients (not just selected)
-            # Group-aware update: only update encoder for groups with overlapping data
-            if i < self.global_rounds:  # Don't send in last round
-                for client in self.clients:
-                    group_id = self.groups.get(client.id, 0)
-
-                    # Always update classifier from group aggregation
-                    if group_id in self.group_classifiers:
-                        client.receive_classifier(copy.deepcopy(self.group_classifiers[group_id]))
-
-                    # For encoder: use weighted combination of global and local
-                    if self.aggregated_encoder:
-                        # Get client's current encoder for mixing
-                        model = load_item(client.role, 'model', client.save_folder_name)
-                        current_encoder = model.get_encoder_params()
-
-                        # Mix global and local encoder (keep more local for non-overlapping groups)
-                        mixed_encoder = {}
-                        # Groups 0 and 1 have no overlapping classes, so keep more local
-                        if group_id in [0, 1]:
-                            alpha = 0.3  # Take 30% from global, 70% from local
-                        else:
-                            alpha = 0.7  # Take 70% from global for IID client
-
-                        for key in self.aggregated_encoder.keys():
-                            mixed_encoder[key] = (alpha * self.aggregated_encoder[key] +
-                                                 (1 - alpha) * current_encoder[key].to(self.device))
-
-                        client.receive_encoder(copy.deepcopy(mixed_encoder))
-
-            # In the last round, collect features and train server classifier
+            # Collect features and train server classifier in the last round
             if i == self.global_rounds:
-                print("\n-------------Final Round: Collecting Features-------------")
-                self.collect_features_labels()
-                self.train_server_classifier()
+                print("\n-------------Final Round: Training Server Classifier-------------")
+                self.collect_features_and_train_server()
 
             # Evaluation
             if i % self.eval_gap == 0:
@@ -170,7 +135,8 @@ class FedEXT(Server):
         # Final evaluation with server classifier
         if self.server_classifier is not None:
             print("\n-------------Final Server Classifier Evaluation-------------")
-            self.test_server_classifier()
+            final_acc = self.test_server_classifier()
+            print(f"Final Server Accuracy: {final_acc:.4f}")
 
         # Log final metrics to wandb
         if self.use_wandb:
@@ -185,27 +151,26 @@ class FedEXT(Server):
         self.save_results()
 
     def send_models(self):
-        """Send initial models to selected clients"""
-        # For the first round, initialize aggregated encoder if empty
-        if not self.aggregated_encoder or len(self.aggregated_encoder) == 0:
-            # Get initial model from first client for initialization
-            sample_client = self.selected_clients[0]
-            model = load_item(sample_client.role, 'model', sample_client.save_folder_name)
-            model.to(self.device)
-            self.aggregated_encoder = model.get_encoder_params()
+        """Send global encoder and group classifiers to selected clients"""
+        assert (len(self.selected_clients) > 0)
 
-            # Initialize group classifiers if not already initialized
-            if not self.group_classifiers:
-                for group_id in set(self.groups.values()):
-                    self.group_classifiers[group_id] = model.get_classifier_params()
+        # Load global encoder
+        global_encoder = load_item(self.role, 'global_encoder', self.save_folder_name)
 
-        # Send models to all selected clients
         for client in self.selected_clients:
-            if self.aggregated_encoder:
-                client.receive_encoder(copy.deepcopy(self.aggregated_encoder))
+            # Get client's model
+            model = load_item(client.role, 'model', client.save_folder_name)
+
+            # Update encoder with global encoder
+            model.encoder.load_state_dict(copy.deepcopy(global_encoder))
+
+            # Update classifier with group classifier
             group_id = self.groups.get(client.id, 0)
-            if group_id in self.group_classifiers:
-                client.receive_classifier(copy.deepcopy(self.group_classifiers[group_id]))
+            group_classifier = load_item(self.role, f'group_classifier_{group_id}', self.save_folder_name)
+            model.classifier.load_state_dict(copy.deepcopy(group_classifier))
+
+            # Save updated model
+            save_item(model, client.role, 'model', client.save_folder_name)
 
     def receive_models(self):
         """Receive encoder and classifier parameters from selected clients"""
@@ -224,71 +189,36 @@ class FedEXT(Server):
             self.uploaded_weights.append(client.train_samples)
             self.uploaded_groups.append(self.groups.get(client.id, 0))
 
-            # Get encoder and classifier parameters
-            encoder_params = client.get_encoder_params()
-            classifier_params = client.get_classifier_params()
-
-            self.uploaded_encoders.append(encoder_params)
-            self.uploaded_classifiers.append(classifier_params)
+            # Load client model
+            model = load_item(client.role, 'model', client.save_folder_name)
+            self.uploaded_encoders.append(model.encoder.state_dict())
+            self.uploaded_classifiers.append(model.classifier.state_dict())
 
         # Normalize weights
         for i, w in enumerate(self.uploaded_weights):
             self.uploaded_weights[i] = w / tot_samples
 
     def aggregate_encoders(self):
-        """Aggregate encoders within groups first, then global aggregation with group weights"""
+        """Aggregate encoders globally using FedAvg"""
         assert (len(self.uploaded_encoders) > 0)
 
-        print("\nAggregating encoders with group-aware strategy...")
+        print("\nAggregating encoders globally (FedAvg style)...")
 
-        # First, aggregate encoders within each group
-        group_encoders = {}
-        group_total_samples = {}
-
-        for i, (client_id, group_id, encoder) in enumerate(
-                zip(self.uploaded_ids, self.uploaded_groups, self.uploaded_encoders)):
-
-            if group_id not in group_encoders:
-                group_encoders[group_id] = {}
-                group_total_samples[group_id] = 0
-                for key in encoder.keys():
-                    group_encoders[group_id][key] = torch.zeros_like(encoder[key])
-
-            # Find client's sample count
-            client_samples = 0
-            for client in self.selected_clients:
-                if client.id == client_id:
-                    client_samples = client.train_samples
-                    break
-
-            # Add to group aggregation
-            for key in encoder.keys():
-                group_encoders[group_id][key] += encoder[key] * client_samples
-            group_total_samples[group_id] += client_samples
-
-        # Normalize group encoders
-        for group_id in group_encoders:
-            for key in group_encoders[group_id]:
-                group_encoders[group_id][key] /= group_total_samples[group_id]
-
-        # Global aggregation with group weights (weighted by total samples per group)
-        total_samples = sum(group_total_samples.values())
+        # Initialize aggregated encoder
         aggregated_encoder = {}
+        for key in self.uploaded_encoders[0].keys():
+            aggregated_encoder[key] = torch.zeros_like(self.uploaded_encoders[0][key])
 
-        # Initialize with zeros
-        for key in list(group_encoders.values())[0].keys():
-            aggregated_encoder[key] = torch.zeros_like(list(group_encoders.values())[0][key])
-
-        # Weighted average across groups
-        for group_id, group_encoder in group_encoders.items():
-            group_weight = group_total_samples[group_id] / total_samples
+        # Weighted average of encoders
+        for w, encoder_params in zip(self.uploaded_weights, self.uploaded_encoders):
             for key in aggregated_encoder.keys():
-                aggregated_encoder[key] += group_encoder[key] * group_weight
-            print(f"Group {group_id}: weight={group_weight:.3f}, samples={group_total_samples[group_id]}")
+                aggregated_encoder[key] += encoder_params[key] * w
 
-        # Store aggregated encoder
-        self.aggregated_encoder = aggregated_encoder
-        print(f"Aggregated encoders from {len(group_encoders)} groups")
+        # Save aggregated encoder
+        self.global_encoder = aggregated_encoder
+        save_item(self.global_encoder, self.role, 'global_encoder', self.save_folder_name)
+
+        print(f"Aggregated {len(self.uploaded_encoders)} encoders globally")
 
     def aggregate_group_classifiers(self):
         """Aggregate classifiers within each group"""
@@ -297,26 +227,27 @@ class FedEXT(Server):
         # Group clients by their group ID
         group_classifiers_dict = defaultdict(list)
         group_weights_dict = defaultdict(list)
-        group_samples_dict = defaultdict(list)
 
-        for i, (client_id, group_id, classifier) in enumerate(
-                zip(self.uploaded_ids, self.uploaded_groups, self.uploaded_classifiers)):
-            group_classifiers_dict[group_id].append(classifier)
+        for i, (client_id, group_id, classifier, weight) in enumerate(
+                zip(self.uploaded_ids, self.uploaded_groups, self.uploaded_classifiers, self.uploaded_weights)):
             # Find the original sample count for this client
+            client_samples = 0
             for client in self.selected_clients:
                 if client.id == client_id:
-                    group_samples_dict[group_id].append(client.train_samples)
+                    client_samples = client.train_samples
                     break
 
+            group_classifiers_dict[group_id].append(classifier)
+            group_weights_dict[group_id].append(client_samples)
+
         # Aggregate classifiers for each group
-        self.group_classifiers = {}
         for group_id in group_classifiers_dict.keys():
             classifiers = group_classifiers_dict[group_id]
-            samples = group_samples_dict[group_id]
+            weights = group_weights_dict[group_id]
 
-            # Normalize weights within group based on samples
-            total_samples = sum(samples)
-            normalized_weights = [s / total_samples for s in samples]
+            # Normalize weights within group
+            total_samples = sum(weights)
+            normalized_weights = [w / total_samples for w in weights]
 
             # Initialize aggregated classifier for this group
             aggregated_classifier = {}
@@ -326,70 +257,60 @@ class FedEXT(Server):
             # Weighted average within group
             for w, classifier_params in zip(normalized_weights, classifiers):
                 for key in aggregated_classifier.keys():
-                    if key in classifier_params:
-                        aggregated_classifier[key] += classifier_params[key] * w
+                    aggregated_classifier[key] += classifier_params[key] * w
 
             self.group_classifiers[group_id] = aggregated_classifier
+            save_item(aggregated_classifier, self.role, f'group_classifier_{group_id}', self.save_folder_name)
+
             print(f"Group {group_id}: Aggregated {len(classifiers)} classifiers")
 
-    def send_aggregated_models(self):
-        """Send aggregated encoder and group-specific classifier back to clients"""
-        for client in self.selected_clients:
-            # Send aggregated encoder to all clients
-            client.receive_encoder(copy.deepcopy(self.aggregated_encoder))
+    def collect_features_and_train_server(self):
+        """Collect features from all clients and train server classifier"""
+        print("\nCollecting features from all clients...")
 
-            # Send group-specific classifier
-            group_id = self.groups.get(client.id, 0)
-            if group_id in self.group_classifiers:
-                client.receive_classifier(copy.deepcopy(self.group_classifiers[group_id]))
+        all_features = []
+        all_labels = []
 
-    def collect_features_labels(self):
-        """Collect features and labels from all clients for server training"""
-        print("\nCollecting features and labels from all clients...")
-
-        self.collected_features = []
-        self.collected_labels = []
-
+        # Collect features from all clients
         for client in self.clients:
             features, labels = client.extract_features_labels()
-            self.collected_features.append(features)
-            self.collected_labels.append(labels)
+            all_features.append(features)
+            all_labels.append(labels)
 
         # Concatenate all features and labels
-        self.collected_features = torch.cat(self.collected_features, dim=0)
-        self.collected_labels = torch.cat(self.collected_labels, dim=0)
+        train_features = torch.cat(all_features, dim=0)
+        train_labels = torch.cat(all_labels, dim=0)
 
-        print(f"Collected {self.collected_features.shape[0]} samples with feature dimension {self.collected_features.shape[1]}")
+        print(f"Collected {train_features.shape[0]} samples with feature dimension {train_features.shape[1]}")
 
-    def train_server_classifier(self):
-        """Train server's own classifier on collected features"""
+        # Train server classifier
         print("\nTraining server classifier on collected features...")
 
         # Create server classifier
         self.server_classifier = nn.Linear(self.args.feature_dim, self.args.num_classes).to(self.device)
 
         # Create optimizer
-        optimizer = torch.optim.SGD(self.server_classifier.parameters(),
-                                     lr=self.args.server_learning_rate if hasattr(self.args, 'server_learning_rate') else 0.01)
+        server_lr = getattr(self.args, 'server_learning_rate', 0.01)
+        optimizer = torch.optim.SGD(self.server_classifier.parameters(), lr=server_lr, momentum=0.9)
         criterion = nn.CrossEntropyLoss()
 
         # Move data to device
-        features = self.collected_features.to(self.device)
-        labels = self.collected_labels.to(self.device)
+        train_features = train_features.to(self.device)
+        train_labels = train_labels.to(self.device)
 
         # Create dataset and dataloader
-        dataset = torch.utils.data.TensorDataset(features, labels)
-        dataloader = torch.utils.data.DataLoader(dataset,
-                                                  batch_size=self.args.server_batch_size if hasattr(self.args, 'server_batch_size') else 32,
-                                                  shuffle=True)
+        dataset = torch.utils.data.TensorDataset(train_features, train_labels)
+        batch_size = getattr(self.args, 'server_batch_size', 32)
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         # Train server classifier
-        server_epochs = self.args.server_epochs if hasattr(self.args, 'server_epochs') else 50
+        server_epochs = getattr(self.args, 'server_epochs', 20)
         self.server_classifier.train()
 
         for epoch in range(server_epochs):
             epoch_loss = 0.0
-            num_batches = 0
+            correct = 0
+            total = 0
 
             for batch_features, batch_labels in dataloader:
                 optimizer.zero_grad()
@@ -401,31 +322,39 @@ class FedEXT(Server):
                 optimizer.step()
 
                 epoch_loss += loss.item()
-                num_batches += 1
+                _, predicted = torch.max(outputs.data, 1)
+                total += batch_labels.size(0)
+                correct += (predicted == batch_labels).sum().item()
 
-            avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
-            if (epoch + 1) % 10 == 0:
-                print(f"Server Classifier - Epoch {epoch + 1}/{server_epochs}, Loss: {avg_loss:.4f}")
+            avg_loss = epoch_loss / len(dataloader)
+            accuracy = correct / total
 
+            if (epoch + 1) % 5 == 0:
+                print(f"Server Epoch {epoch + 1}/{server_epochs}, Loss: {avg_loss:.4f}, Acc: {accuracy:.4f}")
+
+        # Save server classifier
+        save_item(self.server_classifier, self.role, 'server_classifier', self.save_folder_name)
         print("Server classifier training completed")
 
     def test_server_classifier(self):
         """Test server classifier on global test dataset"""
         if self.server_classifier is None:
-            return None, None, None
+            return 0.0
 
         self.server_classifier.eval()
 
-        # Test on aggregated test dataset
+        # Use the global encoder for feature extraction
+        global_encoder = load_item(self.role, 'global_encoder', self.save_folder_name)
+
+        # Create a temporary model for feature extraction
+        temp_model = FedEXTModel(self.args, 0).to(self.device)
+        temp_model.encoder.load_state_dict(global_encoder)
+        temp_model.eval()
+
         test_acc = 0
         test_num = 0
 
-        # Get a sample client model to use its encoder
-        sample_client = self.clients[0]
-        model = load_item(sample_client.role, 'model', sample_client.save_folder_name)
-        model.to(self.device)
-        model.eval()
-
+        # Test on all clients' test data
         for client in self.clients:
             testloader = client.load_test_data()
 
@@ -437,8 +366,8 @@ class FedEXT(Server):
                         x = x.to(self.device)
                     y = y.to(self.device)
 
-                    # Extract features using encoder
-                    features = model.encoder(x)
+                    # Extract features using global encoder
+                    features = temp_model.encoder(x)
 
                     # Classify using server classifier
                     output = self.server_classifier(features)
@@ -453,9 +382,9 @@ class FedEXT(Server):
         # Log to wandb
         if self.use_wandb:
             wandb.log({
-                "Server/classifier_test_accuracy": accuracy,
-                "Server/classifier_test_samples": test_num,
+                "Server/test_accuracy": accuracy,
+                "Server/test_samples": test_num,
                 "Server/round": len(self.rs_test_acc)
             })
 
-        return test_acc, test_num, accuracy
+        return accuracy

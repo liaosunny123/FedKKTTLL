@@ -114,7 +114,7 @@ class clientFedEXT(Client):
     def extract_features_labels(self):
         """
         Extract features and labels from local training data
-        This is called in the last round to collect data for server training
+        This is called every round to collect data for server training
         """
         trainloader = self.load_train_data()
         model = load_item(self.role, 'model', self.save_folder_name)
@@ -132,8 +132,8 @@ class clientFedEXT(Client):
                     x = x.to(self.device)
                 y = y.to(self.device)
 
-                # Extract features using encoder
-                features = model.encoder(x)
+                # Extract features using base model
+                features = model.extract_features(x)
 
                 all_features.append(features.cpu())
                 all_labels.append(y.cpu())
@@ -141,7 +141,7 @@ class clientFedEXT(Client):
         features = torch.cat(all_features, dim=0)
         labels = torch.cat(all_labels, dim=0)
 
-        print(f"Client {self.id}: Extracted {features.shape[0]} features with dimension {features.shape[1]}")
+        print(f"Client {self.id} (Group {self.group_id}): Extracted {features.shape[0]} features with dimension {features.shape[1]}")
 
         return features, labels
 

@@ -9,7 +9,7 @@ from flcore.clients.clientbase import load_item, save_item
 from flcore.trainmodel.models_fedext import FedEXTModel
 from threading import Thread
 import wandb
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 
 class FedEXT(Server):
@@ -35,7 +35,7 @@ class FedEXT(Server):
         # Initialize client groups (0-19 divided into 5 groups)
         self._initialize_groups()
 
-        # Initialize models
+        # Initialize models and analyze structure
         if args.save_folder_name == 'temp' or 'temp' not in args.save_folder_name:
             # Initialize client models with FedEXT structure
             for client in self.clients:
@@ -46,33 +46,100 @@ class FedEXT(Server):
                 if client.id in self.groups:
                     client.set_group(self.groups[client.id])
 
-            # Analyze model structure for the first client
+            # Analyze model structure and determine key grouping
             if len(self.clients) > 0:
                 sample_model = FedEXTModel(args, 0).to(self.device)
-                base_params = sample_model.get_base_params()
-                head_params = sample_model.get_head_params()
-                total_params = dict(sample_model.state_dict())
-
-                base_keys = len(base_params.keys())
-                head_keys = len(head_params.keys())
-                total_keys = len(total_params.keys())
-
-                print(f"\nModel structure analysis:")
-                print(f"  Total parameter keys: {total_keys}")
-                print(f"  Base (encoder) keys: {base_keys} ({base_keys/total_keys*100:.1f}%)")
-                print(f"  Head (classifier) keys: {head_keys} ({head_keys/total_keys*100:.1f}%)")
+                self._analyze_model_structure(sample_model)
 
         print(f"\nClient groups: {self.groups}")
         print(f"Encoder ratio: {self.encoder_ratio}")
-        print(f"Aggregation strategy based on encoder_ratio:")
+        print(f"Aggregation strategy:")
         if self.encoder_ratio >= 0.99:
-            print(f"  → Pure FedAvg mode (all parameters global aggregation)")
+            print(f"  → Pure FedAvg mode (100% global aggregation)")
         elif self.encoder_ratio <= 0.01:
-            print(f"  → Pure Group mode (all parameters group aggregation)")
+            print(f"  → Pure Group mode (100% group aggregation)")
         else:
             print(f"  → Hybrid mode:")
-            print(f"    - First {self.encoder_ratio*100:.0f}% of parameters: global aggregation")
-            print(f"    - Last {(1-self.encoder_ratio)*100:.0f}% of parameters: group aggregation")
+            print(f"    - First {self.encoder_ratio*100:.0f}% of layers: global aggregation")
+            print(f"    - Last {(1-self.encoder_ratio)*100:.0f}% of layers: group aggregation")
+
+    def _analyze_model_structure(self, sample_model):
+        """
+        Analyze model structure to determine layer ordering
+        PyTorch state_dict() preserves module registration order:
+        - Modules are visited in the order they were registered
+        - For BaseHeadSplit: base.* keys come before head.* keys
+        """
+        # Get all parameters in order
+        all_state_dict = sample_model.state_dict()
+        all_keys_ordered = list(all_state_dict.keys())
+
+        # Get base and head parameters
+        base_params = sample_model.get_base_params()
+        head_params = sample_model.get_head_params()
+
+        base_keys = set(base_params.keys())
+        head_keys = set(head_params.keys())
+
+        # Preserve registration order within base and head
+        self.ordered_base_keys = [k for k in all_keys_ordered if k in base_keys]
+        self.ordered_head_keys = [k for k in all_keys_ordered if k in head_keys]
+
+        # Combine: base keys first (encoder), then head keys (classifier)
+        # This matches the forward pass: base(x) -> head(base_output)
+        self.all_keys_ordered = self.ordered_base_keys + self.ordered_head_keys
+
+        print(f"\nModel structure analysis:")
+        print(f"  Total parameters: {len(self.all_keys_ordered)} keys")
+        print(f"  Base (encoder) parameters: {len(self.ordered_base_keys)} keys")
+        print(f"  Head (classifier) parameters: {len(self.ordered_head_keys)} keys")
+
+        # Calculate split point based on encoder_ratio
+        total_keys = len(self.all_keys_ordered)
+        base_key_count = len(self.ordered_base_keys)
+        head_key_count = len(self.ordered_head_keys)
+
+        # More intuitive split calculation
+        if self.encoder_ratio >= 0.99:
+            # Pure FedAvg: aggregate everything globally
+            self.split_point = total_keys
+        elif self.encoder_ratio <= 0.01:
+            # Pure Group: aggregate everything in groups
+            self.split_point = 0
+        else:
+            # Hybrid: split proportionally
+            # encoder_ratio=0.7 means 70% of all parameters are aggregated globally
+            self.split_point = int(total_keys * self.encoder_ratio)
+
+            # Ensure we don't split in the middle of base or head unnecessarily
+            # If split point is close to base/head boundary, snap to it
+            if abs(self.split_point - base_key_count) <= 2:
+                self.split_point = base_key_count
+                print(f"  Adjusted split to base/head boundary")
+
+        print(f"\n  With encoder_ratio={self.encoder_ratio}:")
+        if self.split_point == 0:
+            print(f"    - All parameters use group aggregation")
+        elif self.split_point == total_keys:
+            print(f"    - All parameters use global aggregation")
+        else:
+            print(f"    - Global aggregation: first {self.split_point} keys")
+            print(f"    - Group aggregation: last {total_keys-self.split_point} keys")
+
+            # Show which parts are globally/group aggregated
+            global_base = min(self.split_point, base_key_count)
+            global_head = max(0, self.split_point - base_key_count)
+            group_base = max(0, base_key_count - self.split_point)
+            group_head = max(0, total_keys - max(self.split_point, base_key_count))
+
+            if global_base > 0:
+                print(f"    - Base: {global_base}/{base_key_count} keys globally aggregated")
+            if global_head > 0:
+                print(f"    - Head: {global_head}/{head_key_count} keys globally aggregated")
+            if group_head > 0:
+                print(f"    - Head: {group_head}/{head_key_count} keys group aggregated")
+            if group_base > 0:
+                print(f"    - Base: {group_base}/{base_key_count} keys group aggregated")
 
     def _initialize_groups(self):
         """Initialize client groups based on predefined assignment"""
@@ -162,49 +229,42 @@ class FedEXT(Server):
     def aggregate_models_by_ratio(self):
         """
         Aggregate models based on encoder_ratio
-        Split parameters based on ratio and aggregate accordingly
+        Split parameters by layer order, not randomly
         """
         print(f"\nAggregating models (encoder_ratio={self.encoder_ratio})...")
 
-        # Get all parameter keys
-        all_keys = list(self.uploaded_models[0].keys())
-        total_keys = len(all_keys)
-
-        # Calculate split point based on encoder_ratio
-        encoder_keys_count = int(total_keys * self.encoder_ratio)
-
-        # Split keys into encoder and classifier
-        encoder_keys = all_keys[:encoder_keys_count]
-        classifier_keys = all_keys[encoder_keys_count:]
-
-        print(f"  Encoder parameters (global): {len(encoder_keys)} keys")
-        print(f"  Classifier parameters (group): {len(classifier_keys)} keys")
-
         # Special cases
         if self.encoder_ratio >= 0.99:
-            # Pure FedAvg: aggregate all parameters globally
-            print("  Mode: Pure FedAvg (all global aggregation)")
-            aggregated_models = self._aggregate_all_globally()
-            self._distribute_models(aggregated_models)
+            # Pure FedAvg: aggregate ALL parameters globally (including head!)
+            print("  Mode: Pure FedAvg (100% global aggregation)")
+            aggregated_model = self._aggregate_all_globally()
+            self._distribute_models(aggregated_model)
 
         elif self.encoder_ratio <= 0.01:
-            # Pure Group: aggregate all parameters within groups
-            print("  Mode: Pure Group (all group aggregation)")
+            # Pure Group: aggregate ALL parameters within groups
+            print("  Mode: Pure Group (100% group aggregation)")
             group_models = self._aggregate_all_by_groups()
             self._distribute_group_models(group_models)
 
         else:
-            # Hybrid: encoder global, classifier group
-            print("  Mode: Hybrid (mixed aggregation)")
+            # Hybrid mode: split by layer order
+            print(f"  Mode: Hybrid (split at key {self.split_point})")
 
-            # Aggregate encoder globally
-            global_encoder = self._aggregate_parameters_globally(encoder_keys)
+            # Split keys based on the pre-calculated split point
+            global_keys = self.all_keys_ordered[:self.split_point]
+            group_keys = self.all_keys_ordered[self.split_point:]
 
-            # Aggregate classifier by groups
-            group_classifiers = self._aggregate_parameters_by_groups(classifier_keys)
+            print(f"    - Global aggregation: {len(global_keys)} keys")
+            print(f"    - Group aggregation: {len(group_keys)} keys")
 
-            # Combine and distribute
-            self._distribute_hybrid_models(global_encoder, encoder_keys, group_classifiers, classifier_keys)
+            # Aggregate global part
+            global_params = self._aggregate_parameters_globally(global_keys)
+
+            # Aggregate group part
+            group_params = self._aggregate_parameters_by_groups(group_keys)
+
+            # Distribute combined models
+            self._distribute_hybrid_models(global_params, global_keys, group_params, group_keys)
 
     def _aggregate_all_globally(self):
         """Aggregate all parameters globally (FedAvg style)"""
@@ -258,6 +318,7 @@ class FedEXT(Server):
                     aggregated[key] += params[key] * w
 
             group_models[group_id] = aggregated
+            print(f"  Group {group_id}: Aggregated {len(params_list)} models")
 
         return group_models
 
@@ -332,8 +393,8 @@ class FedEXT(Server):
                 model.load_state_dict(group_models[group_id])
                 save_item(model, client.role, 'model', client.save_folder_name)
 
-    def _distribute_hybrid_models(self, global_encoder, encoder_keys, group_classifiers, classifier_keys):
-        """Distribute hybrid models (global encoder + group classifier) to clients"""
+    def _distribute_hybrid_models(self, global_params, global_keys, group_params, group_keys):
+        """Distribute hybrid models (part global, part group)"""
         for client in self.clients:
             group_id = self.groups.get(client.id, 0)
 
@@ -341,14 +402,14 @@ class FedEXT(Server):
             model = load_item(client.role, 'model', client.save_folder_name)
             model_state = model.state_dict()
 
-            # Update encoder parameters (global)
-            for key in encoder_keys:
-                model_state[key] = global_encoder[key]
+            # Update global part
+            for key in global_keys:
+                model_state[key] = global_params[key]
 
-            # Update classifier parameters (from group)
-            if group_id in group_classifiers:
-                for key in classifier_keys:
-                    model_state[key] = group_classifiers[group_id][key]
+            # Update group part
+            if group_id in group_params:
+                for key in group_keys:
+                    model_state[key] = group_params[group_id][key]
 
             # Load updated state
             model.load_state_dict(model_state)

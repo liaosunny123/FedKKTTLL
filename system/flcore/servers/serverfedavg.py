@@ -140,7 +140,7 @@ class FedAvg(Server):
             self.uploaded_weights[i] = w / tot_samples
 
     def aggregate_parameters(self):
-        """Aggregate client models using weighted average"""
+        """Aggregate client models using weighted average with proper type handling"""
         assert (len(self.uploaded_models) > 0)
 
         # Load global model
@@ -149,7 +149,7 @@ class FedAvg(Server):
         # Get global model parameters
         global_params = global_model.state_dict()
 
-        # Initialize aggregated parameters
+        # Initialize aggregated parameters with zeros (maintaining original dtype)
         for key in global_params.keys():
             global_params[key] = torch.zeros_like(global_params[key])
 
@@ -158,7 +158,23 @@ class FedAvg(Server):
             client_params = client_model.state_dict()
             for key in global_params.keys():
                 if key in client_params:
-                    global_params[key] += client_params[key] * w
+                    # Handle different parameter types
+                    if client_params[key].dtype in [torch.float32, torch.float64, torch.float16]:
+                        # Floating point parameters - normal weighted average
+                        global_params[key] += client_params[key] * w
+                    elif 'num_batches_tracked' in key:
+                        # BatchNorm's num_batches_tracked - use sum instead of weighted average
+                        global_params[key] += client_params[key]
+                    else:
+                        # For other integer types, use the first client's value or handle specially
+                        if torch.all(global_params[key] == 0):
+                            global_params[key] = client_params[key].clone()
+
+        # For BatchNorm's num_batches_tracked, average the sum
+        for key in global_params.keys():
+            if 'num_batches_tracked' in key and len(self.uploaded_models) > 0:
+                # Average the total batches tracked across clients
+                global_params[key] = global_params[key] // len(self.uploaded_models)
 
         # Update global model
         global_model.load_state_dict(global_params)

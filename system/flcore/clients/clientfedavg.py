@@ -39,8 +39,13 @@ class clientFedAvg(Client):
             max_local_epochs = np.random.randint(1, max_local_epochs // 2)
 
         epoch_losses = []
+        epoch_accuracies = []
+        
         for epoch in range(max_local_epochs):
             batch_losses = []
+            correct = 0
+            total = 0
+            
             for i, (x, y) in enumerate(trainloader):
                 if type(x) == type([]):
                     x[0] = x[0].to(self.device)
@@ -54,26 +59,44 @@ class clientFedAvg(Client):
                 output = model(x)
                 loss = self.loss(output, y)
                 batch_losses.append(loss.item())
+                
+                # Calculate accuracy
+                _, predicted = torch.max(output.data, 1)
+                total += y.size(0)
+                correct += (predicted == y).sum().item()
 
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
                 optimizer.step()
 
-            # Calculate average loss for this epoch
+            # Calculate epoch metrics
             if batch_losses:
                 epoch_loss = sum(batch_losses) / len(batch_losses)
                 epoch_losses.append(epoch_loss)
+                epoch_acc = correct / total if total > 0 else 0
+                epoch_accuracies.append(epoch_acc)
 
-                # Log epoch metrics to wandb
+                # Log epoch metrics to wandb with client-specific step
                 if self.use_wandb:
-                    global_step = self.current_round * 1000 + epoch
-                    wandb.log({
+                    # 使用统一的全局step计算
+                    global_step = (self.current_round - 1) * max_local_epochs + epoch
+                    
+                    # 每个客户端记录自己的step
+                    log_dict = {
+                        f"Client_{self.id}/step": global_step,
                         f"Client_{self.id}/epoch_loss": epoch_loss,
+                        f"Client_{self.id}/epoch_accuracy": epoch_acc,
                         f"Client_{self.id}/learning_rate": current_lr,
                         f"Client_{self.id}/round": self.current_round,
                         f"Client_{self.id}/local_epoch": epoch,
-                    }, step=global_step)
+                    }
+                    
+                    # 为每个客户端定义自己的x轴
+                    wandb.define_metric(f"Client_{self.id}/step")
+                    wandb.define_metric(f"Client_{self.id}/*", step_metric=f"Client_{self.id}/step")
+                    
+                    wandb.log(log_dict)
 
         save_item(model, self.role, 'model', self.save_folder_name)
 
@@ -81,23 +104,34 @@ class clientFedAvg(Client):
         self.train_time_cost['num_rounds'] += 1
         self.train_time_cost['total_cost'] += train_time
 
+        # Calculate training summary
+        avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
+        avg_acc = sum(epoch_accuracies) / len(epoch_accuracies) if epoch_accuracies else 0
+
         # Log training summary to wandb
         if self.use_wandb:
-            avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
-            global_step = self.current_round * 1000 + max_local_epochs
-            wandb.log({
+            # 使用轮次结束时的step
+            global_step = self.current_round * max_local_epochs
+            
+            log_dict = {
+                f"Client_{self.id}/step": global_step,
                 f"Client_{self.id}/train_time": train_time,
                 f"Client_{self.id}/total_epochs": max_local_epochs,
                 f"Client_{self.id}/avg_train_loss": avg_loss,
+                f"Client_{self.id}/avg_train_accuracy": avg_acc,
                 f"Client_{self.id}/global_round": self.current_round,
                 f"Client_{self.id}/num_train_samples": len(trainloader.dataset) if hasattr(trainloader, 'dataset') else 0
-            }, step=global_step)
+            }
+            
+            wandb.log(log_dict)
 
-        # Print training information
-        if hasattr(trainloader.dataset, 'indices'):
-            print(f"Client {self.id}: Trained on {len(trainloader.dataset.indices)} samples")
-        else:
-            print(f"Client {self.id}: Training completed")
+        # Print training information with details
+        num_samples = len(trainloader.dataset.indices) if hasattr(trainloader.dataset, 'indices') else len(trainloader.dataset) if hasattr(trainloader, 'dataset') else 'unknown'
+        print(f"Client {self.id}: "
+              f"Round {self.current_round} - "
+              f"Trained on {num_samples} samples, "
+              f"Avg loss: {avg_loss:.4f}, "
+              f"Avg acc: {avg_acc:.4f}")
 
     def test_metrics(self):
         testloaderfull = self.load_test_data()
@@ -137,13 +171,28 @@ class clientFedAvg(Client):
         # Calculate AUC with softmax normalization
         y_prob_softmax = torch.softmax(torch.from_numpy(y_prob), dim=1).numpy()
         auc = metrics.roc_auc_score(y_true, y_prob_softmax, average='micro')
+        
+        test_accuracy = test_acc / test_num if test_num > 0 else 0
 
-        # Log test metrics to wandb
+        # Log test metrics to wandb with client-specific step
         if self.use_wandb:
-            wandb.log({
-                f"Client_{self.id}/test_accuracy": test_acc / test_num if test_num > 0 else 0,
+            # 测试时的step对齐到训练结束
+            global_step = self.current_round * self.local_epochs
+            
+            log_dict = {
+                f"Client_{self.id}/step": global_step,
+                f"Client_{self.id}/test_accuracy": test_accuracy,
                 f"Client_{self.id}/test_auc": auc,
                 f"Client_{self.id}/test_samples": test_num
-            })
+            }
+            
+            # 确保test metrics使用相同的step定义
+            wandb.define_metric(f"Client_{self.id}/step")
+            wandb.define_metric(f"Client_{self.id}/test_*", step_metric=f"Client_{self.id}/step")
+            
+            wandb.log(log_dict)
+
+        print(f"Client {self.id} Test Results: "
+              f"Acc={test_accuracy:.4f}, AUC={auc:.4f}, Samples={test_num}")
 
         return test_acc, test_num, auc

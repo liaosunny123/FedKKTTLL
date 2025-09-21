@@ -26,6 +26,9 @@ class clientFedEXT(Client):
         self.split_info = None
         self.global_param_count = 0
         self.local_param_count = 0
+        
+        # Track evaluation round for proper WandB logging
+        self.eval_round = 0
     
     def set_group(self, group_id):
         """Set the group ID for this client and report model configuration"""
@@ -159,7 +162,8 @@ class clientFedEXT(Client):
                 
                 # Log epoch metrics to wandb
                 if self.use_wandb:
-                    global_step = self.current_round * 1000 + epoch
+                    # Use a consistent step calculation
+                    global_step = (self.current_round - 1) * max_local_epochs + epoch
                     wandb.log({
                         f"Client_{self.id}/epoch_loss": epoch_loss,
                         f"Client_{self.id}/epoch_accuracy": epoch_acc,
@@ -181,7 +185,8 @@ class clientFedEXT(Client):
         
         # Log training summary to wandb
         if self.use_wandb:
-            global_step = self.current_round * 1000 + max_local_epochs
+            # Use end of round as step for summary
+            global_step = self.current_round * max_local_epochs
             wandb.log({
                 f"Client_{self.id}/train_time": train_time,
                 f"Client_{self.id}/total_epochs": max_local_epochs,
@@ -334,8 +339,11 @@ class clientFedEXT(Client):
     def test_metrics(self):
         """
         Test the model and calculate metrics.
-        Enhanced with split-aware testing capabilities.
+        Enhanced with split-aware testing capabilities and proper WandB logging.
         """
+        # Update evaluation round counter
+        self.eval_round += 1
+        
         testloaderfull = self.load_test_data()
         model = load_item(self.role, 'model', self.save_folder_name)
         model.to(self.device)
@@ -397,13 +405,18 @@ class clientFedEXT(Client):
                 'feature_norm': torch.norm(all_features, dim=1).mean().item()
             }
         
-        # Log test metrics to wandb
+        # Log test metrics to wandb with proper step
         if self.use_wandb:
+            # Use current_round as the basis for step to align with training metrics
+            # Multiply by a large factor to ensure test metrics appear at the right time
+            global_step = self.current_round * self.local_epochs  # Align with end of training
+            
             log_dict = {
                 f"Client_{self.id}/test_accuracy": test_accuracy,
                 f"Client_{self.id}/test_auc": auc,
                 f"Client_{self.id}/test_samples": test_num,
                 f"Client_{self.id}/group_id": self.group_id,
+                f"Client_{self.id}/eval_round": self.eval_round,  # Track which evaluation this is
             }
             
             # Add feature statistics if available
@@ -411,7 +424,8 @@ class clientFedEXT(Client):
                 for key, value in feature_stats.items():
                     log_dict[f"Client_{self.id}/{key}"] = value
             
-            wandb.log(log_dict)
+            # Log with step parameter for proper time alignment
+            wandb.log(log_dict, step=global_step)
         
         # Print detailed test results
         print(f"Client {self.id} (Group {self.group_id}) Test Results: "

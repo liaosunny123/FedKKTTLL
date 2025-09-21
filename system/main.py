@@ -94,6 +94,10 @@ def run(args):
                 'torchvision.models.vit_b_16(image_size=32, num_classes=args.num_classes)', 
                 'torchvision.models.vit_b_32(image_size=32, num_classes=args.num_classes)'
             ]
+        elif args.model_family == "FedEXT":
+            args.models = [
+                'torchvision.models.resnet18(pretrained=False, num_classes=args.num_classes)',
+            ]
 
         else:
             raise NotImplementedError

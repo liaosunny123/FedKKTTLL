@@ -27,8 +27,8 @@ class clientFedEXT(Client):
         self.global_param_count = 0
         self.local_param_count = 0
         
-        # Track evaluation round for proper WandB logging
-        self.eval_round = 0
+        # Track steps for this client
+        self.client_step = 0
     
     def set_group(self, group_id):
         """Set the group ID for this client and report model configuration"""
@@ -160,18 +160,27 @@ class clientFedEXT(Client):
                 epoch_acc = correct / total if total > 0 else 0
                 epoch_accuracies.append(epoch_acc)
                 
-                # Log epoch metrics to wandb
+                # Log epoch metrics to wandb with client-specific step
                 if self.use_wandb:
-                    # Use a consistent step calculation
+                    # 使用简单的全局step计算
                     global_step = (self.current_round - 1) * max_local_epochs + epoch
-                    wandb.log({
+                    
+                    # 每个客户端记录自己的step
+                    log_dict = {
+                        f"Client_{self.id}/step": global_step,
                         f"Client_{self.id}/epoch_loss": epoch_loss,
                         f"Client_{self.id}/epoch_accuracy": epoch_acc,
                         f"Client_{self.id}/learning_rate": current_lr,
                         f"Client_{self.id}/round": self.current_round,
                         f"Client_{self.id}/local_epoch": epoch,
                         f"Client_{self.id}/group_id": self.group_id,
-                    }, step=global_step)
+                    }
+                    
+                    # 为每个客户端定义自己的x轴
+                    wandb.define_metric(f"Client_{self.id}/step")
+                    wandb.define_metric(f"Client_{self.id}/*", step_metric=f"Client_{self.id}/step")
+                    
+                    wandb.log(log_dict)
         
         save_item(model, self.role, 'model', self.save_folder_name)
         
@@ -185,9 +194,11 @@ class clientFedEXT(Client):
         
         # Log training summary to wandb
         if self.use_wandb:
-            # Use end of round as step for summary
+            # 使用轮次结束时的step
             global_step = self.current_round * max_local_epochs
-            wandb.log({
+            
+            log_dict = {
+                f"Client_{self.id}/step": global_step,
                 f"Client_{self.id}/train_time": train_time,
                 f"Client_{self.id}/total_epochs": max_local_epochs,
                 f"Client_{self.id}/avg_train_loss": avg_loss,
@@ -196,7 +207,9 @@ class clientFedEXT(Client):
                 f"Client_{self.id}/num_train_samples": len(trainloader.dataset) if hasattr(trainloader, 'dataset') else 0,
                 f"Client_{self.id}/global_param_count": self.global_param_count,
                 f"Client_{self.id}/local_param_count": self.local_param_count,
-            }, step=global_step)
+            }
+            
+            wandb.log(log_dict)
         
         # Print training information with more details
         num_samples = len(trainloader.dataset.indices) if hasattr(trainloader.dataset, 'indices') else len(trainloader.dataset) if hasattr(trainloader, 'dataset') else 'unknown'
@@ -341,9 +354,6 @@ class clientFedEXT(Client):
         Test the model and calculate metrics.
         Enhanced with split-aware testing capabilities and proper WandB logging.
         """
-        # Update evaluation round counter
-        self.eval_round += 1
-        
         testloaderfull = self.load_test_data()
         model = load_item(self.role, 'model', self.save_folder_name)
         model.to(self.device)
@@ -405,18 +415,17 @@ class clientFedEXT(Client):
                 'feature_norm': torch.norm(all_features, dim=1).mean().item()
             }
         
-        # Log test metrics to wandb with proper step
+        # Log test metrics to wandb with client-specific step
         if self.use_wandb:
-            # Use current_round as the basis for step to align with training metrics
-            # Multiply by a large factor to ensure test metrics appear at the right time
-            global_step = self.current_round * self.local_epochs  # Align with end of training
+            # 测试时的step对齐到训练结束
+            global_step = self.current_round * self.local_epochs
             
             log_dict = {
+                f"Client_{self.id}/step": global_step,
                 f"Client_{self.id}/test_accuracy": test_accuracy,
                 f"Client_{self.id}/test_auc": auc,
                 f"Client_{self.id}/test_samples": test_num,
                 f"Client_{self.id}/group_id": self.group_id,
-                f"Client_{self.id}/eval_round": self.eval_round,  # Track which evaluation this is
             }
             
             # Add feature statistics if available
@@ -424,8 +433,11 @@ class clientFedEXT(Client):
                 for key, value in feature_stats.items():
                     log_dict[f"Client_{self.id}/{key}"] = value
             
-            # Log with step parameter for proper time alignment
-            wandb.log(log_dict, step=global_step)
+            # 确保test metrics使用相同的step定义
+            wandb.define_metric(f"Client_{self.id}/step")
+            wandb.define_metric(f"Client_{self.id}/test_*", step_metric=f"Client_{self.id}/step")
+            
+            wandb.log(log_dict)
         
         # Print detailed test results
         print(f"Client {self.id} (Group {self.group_id}) Test Results: "

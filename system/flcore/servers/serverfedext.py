@@ -434,7 +434,15 @@ class FedEXT(Server):
         train_labels = torch.cat(train_labels_list, dim=0)
         
         print(f"Collected {train_embeddings.shape[0]} training samples with embedding dimension {train_embeddings.shape[1]}")
-        
+
+        # Log embedding collection metrics to wandb
+        if self.use_wandb:
+            wandb.log({
+                "Server/embeddings_train_total": train_embeddings.shape[0],
+                "Server/embeddings_dimension": train_embeddings.shape[1],
+                "Server/embeddings_num_clients": len(self.clients)
+            })
+
         # Build global test dataset with balanced sampling
         print("\nBuilding balanced global test dataset...")
         test_embeddings_list = []
@@ -461,7 +469,15 @@ class FedEXT(Server):
         test_labels = torch.cat(balanced_test_labels, dim=0)
         
         print(f"Built balanced test set with {test_embeddings.shape[0]} samples ({min_test_samples} per client)")
-        
+
+        # Log test dataset construction metrics to wandb
+        if self.use_wandb:
+            wandb.log({
+                "Server/embeddings_test_total": test_embeddings.shape[0],
+                "Server/embeddings_test_per_client": min_test_samples,
+                "Server/embeddings_test_balance_ratio": min_test_samples * len(self.clients) / test_embeddings.shape[0]
+            })
+
         # Train global classifier (head) on server
         print("\nTraining global classifier on server...")
         
@@ -519,22 +535,33 @@ class FedEXT(Server):
             epoch_loss = 0
             correct = 0
             total = 0
-            
+
             for features, labels in train_loader:
                 optimizer.zero_grad()
                 outputs = global_classifier(features)
                 loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
-                
+
                 epoch_loss += loss.item()
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
-            
+
             train_acc = correct / total
+            avg_loss = epoch_loss / len(train_loader)
+
+            # Log training metrics to wandb
+            if self.use_wandb:
+                wandb.log({
+                    "Server/classifier_epoch": epoch,
+                    "Server/classifier_train_loss": avg_loss,
+                    "Server/classifier_train_accuracy": train_acc,
+                    "Server/classifier_learning_rate": self.args.local_learning_rate
+                })
+
             if epoch % 2 == 0:
-                print(f"  Epoch {epoch}: Loss = {epoch_loss/len(train_loader):.4f}, Train Acc = {train_acc:.4f}")
+                print(f"  Epoch {epoch}: Loss = {avg_loss:.4f}, Train Acc = {train_acc:.4f}")
         
         # Test global model
         print("\nTesting global model...")
@@ -547,10 +574,29 @@ class FedEXT(Server):
         
         print(f"Global Model Test Accuracy: {accuracy:.4f}")
         print(f"  (Tested on {test_embeddings.shape[0]} balanced samples)")
-        
+
         # Store global model results
         self.global_test_acc = accuracy
-        
+
+        # Log global model test metrics to wandb
+        if self.use_wandb:
+            # 使用与客户端类似的step定义
+            global_step = self.global_rounds * self.local_epochs
+
+            wandb.log({
+                "Server/step": global_step,
+                "Server/global_model_test_accuracy": accuracy,
+                "Server/global_model_test_samples": test_embeddings.shape[0],
+                "Server/global_model_train_samples": train_embeddings.shape[0],
+                "Server/balanced_samples_per_client": min_test_samples,
+                "Server/embedding_dim": train_embeddings.shape[1],
+                "Server/final_round": self.global_rounds
+            })
+
+            # 定义Server指标的step轴
+            wandb.define_metric("Server/step")
+            wandb.define_metric("Server/global_model_*", step_metric="Server/step")
+
         return accuracy
     
     def adaptive_update_split_ratio(self, new_ratio):

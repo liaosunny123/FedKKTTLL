@@ -13,13 +13,19 @@ DEVICE_ID=1               # GPU设备ID
 DATASET="Cifar10"         # 数据集 (Cifar10, MNIST, etc.)
 MODEL_FAMILY="FedEXT"      # 模型族 (HtM10包含10种异构模型)
 IS_HOMOGENEITY_MODEL=1    # 是否使用同构模型 (1=所有客户端使用相同模型, 0=使用异构模型族)
-NUM_CLASSES=20            # 分类数量
+NUM_CLASSES=10            # 分类数量
 FEATURE_DIM=512           # 特征维度
 
 # 联邦学习参数
 NUM_CLIENTS=20            # 客户端总数
 JOIN_RATIO=1              # 每轮参与的客户端比例 (0.0-1.0)
 GLOBAL_ROUNDS=100         # 全局训练轮次
+
+# FedEXT参数
+ENCODER_RATIO=0.7       # Encoder层数比例 (0.7表示70%层作为Encoder，30%作为Classifier)
+SERVER_LR=0.01          # Server classifier学习率
+SERVER_BATCH_SIZE=32    # Server classifier batch size
+SERVER_EPOCHS=20        # Server classifier训练轮次
 
 # 本地训练参数
 LOCAL_LR=0.005           # 本地学习率 (与FedAvg保持一致)
@@ -45,12 +51,6 @@ GENERATOR_PATH=""
 # 算法调优参数
 LAMBDA=0.01              # 正则化系数
 MU=1                   # 损失权重系数
-
-# FedEXT参数
-ENCODER_RATIO=0.7       # Encoder层数比例 (0.7表示70%层作为Encoder，30%作为Classifier)
-SERVER_LR=0.01          # Server classifier学习率
-SERVER_BATCH_SIZE=32    # Server classifier batch size
-SERVER_EPOCHS=20        # Server classifier训练轮次
 
 # ETF Classifier配置
 USE_ETF=0               # 是否使用ETF分类器 (1=使用, 0=不使用)

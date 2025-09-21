@@ -91,11 +91,13 @@ class clientFedEXT(Client):
             for layer_name, layer in model.local_layers:
                 local_params.extend(layer.parameters())
             
+            # Create optimizer with parameter groups (can use different LRs if needed)
             param_groups = []
             if global_params:
                 param_groups.append({'params': global_params, 'lr': current_lr})
             if local_params:
-                local_lr = current_lr 
+                # Could use different learning rate for local params if desired
+                local_lr = current_lr  # * 1.5  # Optional: higher LR for local params
                 param_groups.append({'params': local_params, 'lr': local_lr})
             
             if param_groups:
@@ -220,8 +222,17 @@ class clientFedEXT(Client):
                     x = x.to(self.device)
                 y = y.to(self.device)
                 
-                # Extract features using globally aggregated layers
-                features = model.extract_global_features(x)
+                # Extract features based on model configuration
+                if hasattr(model, 'forward_split'):
+                    # Use forward_split to get features at the split point
+                    features, _ = model.forward_split(x)
+                else:
+                    # Fallback to extract_global_features
+                    features = model.extract_global_features(x)
+                
+                # Ensure features are properly shaped (flattened)
+                if len(features.shape) > 2:
+                    features = torch.flatten(features, 1)
                 
                 all_features.append(features.cpu())
                 all_labels.append(y.cpu())
@@ -229,8 +240,17 @@ class clientFedEXT(Client):
         features = torch.cat(all_features, dim=0)
         labels = torch.cat(all_labels, dim=0)
         
-        print(f"Client {self.id} (Group {self.group_id}): "
-              f"Extracted {features.shape[0]} features with dimension {features.shape[1]}")
+        # Handle special cases
+        if hasattr(model, 'layer_split_index'):
+            if model.layer_split_index == 0:
+                print(f"Client {self.id} (Group {self.group_id}): "
+                      f"Pure group mode - extracted {features.shape[0]} penultimate layer features")
+            else:
+                print(f"Client {self.id} (Group {self.group_id}): "
+                      f"Extracted {features.shape[0]} features with dimension {features.shape[1]}")
+        else:
+            print(f"Client {self.id} (Group {self.group_id}): "
+                  f"Extracted {features.shape[0]} features with dimension {features.shape[1]}")
         
         return features, labels
     
@@ -255,8 +275,17 @@ class clientFedEXT(Client):
                     x = x.to(self.device)
                 y = y.to(self.device)
                 
-                # Extract features using globally aggregated layers
-                features = model.extract_global_features(x)
+                # Extract features based on model configuration
+                if hasattr(model, 'forward_split'):
+                    # Use forward_split to get features at the split point
+                    features, _ = model.forward_split(x)
+                else:
+                    # Fallback to extract_global_features
+                    features = model.extract_global_features(x)
+                
+                # Ensure features are properly shaped (flattened)
+                if len(features.shape) > 2:
+                    features = torch.flatten(features, 1)
                 
                 all_features.append(features.cpu())
                 all_labels.append(y.cpu())

@@ -8,6 +8,11 @@ import math
 
 
 class FedEXTModel(BaseHeadSplit):
+    """
+    Improved FedEXT model with fine-grained layer-based splitting.
+    Supports extraction of intermediate features at any split point.
+    Specifically designed to handle ResNet18 and FedAvgCNN architectures.
+    """
 
     def __init__(self, args, cid):
         super().__init__(args, cid)
@@ -265,9 +270,9 @@ class FedEXTModel(BaseHeadSplit):
         Execute layers up to the split point and return intermediate features.
         """
         if self.global_layers is None or len(self.global_layers) == 0:
-            # No global layers, return flattened input
-            batch_size = x.shape[0]
-            return x.view(batch_size, -1)
+            # No global layers (pure group mode), return original input
+            # Don't flatten here as local layers may expect 4D input
+            return x
 
         # Execute global layers sequentially
         out = x
@@ -311,17 +316,40 @@ class FedEXTModel(BaseHeadSplit):
             features: Features at the split point
             output: Final output after all layers
         """
-        # Execute global layers to get features
-        features = self.extract_global_features(x)
-
-        # Execute local layers if they exist
-        if self.local_layers and len(self.local_layers) > 0:
-            out = features
+        if self.global_layers is None or len(self.global_layers) == 0:
+            # Pure group mode: all layers are local
+            # Execute all local layers to get both features and output
+            out = x
             for layer_name, layer in self.local_layers:
                 out = self._forward_layer(out, layer_name, layer)
+            
+            # For feature extraction in pure group mode, 
+            # return the penultimate layer output as features
+            if len(self.local_layers) > 1:
+                # Re-run to get features from second-to-last layer
+                features = x
+                for layer_name, layer in self.local_layers[:-1]:
+                    features = self._forward_layer(features, layer_name, layer)
+                # Ensure features are flattened for compatibility
+                if len(features.shape) > 2:
+                    features = torch.flatten(features, 1)
+            else:
+                # Only one layer, return flattened input as features
+                features = torch.flatten(x, 1) if len(x.shape) > 2 else x
+            
             return features, out
         else:
-            return features, features
+            # Normal case: execute global layers to get features
+            features = self.extract_global_features(x)
+            
+            # Execute local layers if they exist
+            if self.local_layers and len(self.local_layers) > 0:
+                out = features
+                for layer_name, layer in self.local_layers:
+                    out = self._forward_layer(out, layer_name, layer)
+                return features, out
+            else:
+                return features, features
 
     def forward(self, x):
         """

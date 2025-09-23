@@ -21,7 +21,7 @@ MOMENTUM=0.9
 WEIGHT_DECAY=1e-4
 DEVICE="cuda"               # 根据需要改为 cpu
 USE_BALANCED_TEST=1         # 1=使用平衡测试集，0=使用完整测试集
-FORCE_LINEAR_PROJECTION=0  # 1=保留卷积尾部并用线性层映射输入维度
+FORCE_LINEAR_PROJECTION=1  # 1=保留卷积尾部并用线性层映射输入维度
 
 # ======== WandB 配置 ========
 USE_WANDB=1                 # 1=开启日志，0=关闭

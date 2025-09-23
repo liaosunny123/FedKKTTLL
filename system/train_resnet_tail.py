@@ -53,7 +53,8 @@ def load_feature_dataset(dataset_dir, filename):
 def build_classifier(
     model_expr,
     encoder_ratio,
-    feature_dim,
+    input_feature_dim,
+    model_feature_dim,
     num_classes,
     device,
     dataset_is_flat,
@@ -64,7 +65,7 @@ def build_classifier(
     dummy_args = SimpleNamespace(
         models=[model_expr],
         num_classes=num_classes,
-        feature_dim=feature_dim,
+        feature_dim=model_feature_dim,
         encoder_ratio=encoder_ratio,
     )
     fedext_model = FedEXTModel(dummy_args, 0)
@@ -114,7 +115,7 @@ def build_classifier(
     if projection_added:
         target_dim = int(math.prod(original_feature_shape))
         projection = nn.Sequential(
-            nn.Linear(feature_dim, target_dim),
+            nn.Linear(input_feature_dim, target_dim),
             nn.Unflatten(1, original_feature_shape),
         )
         local_modules.append(projection)
@@ -147,6 +148,8 @@ def build_classifier(
         "dataset_is_flat": dataset_is_flat,
         "input_shape": input_shape,
         "original_feature_shape": tuple(original_feature_shape) if original_feature_shape else None,
+        "model_feature_dim": model_feature_dim,
+        "input_feature_dim": input_feature_dim,
         "requires_flatten_input": False,
         "requires_reshape_input": False,
         "projection_shape": tuple(original_feature_shape) if projection_added else None,
@@ -218,6 +221,8 @@ def main():
     if original_feature_shape:
         original_feature_shape = tuple(original_feature_shape)
 
+    model_feature_dim_meta = metadata.get("model_feature_dim")
+
     num_classes = args.num_classes or int(train_labels.max().item() + 1)
 
     train_features = train_features.float()
@@ -230,13 +235,23 @@ def main():
         original_feature_shape = input_shape
 
     dataset_is_flat = len(input_shape) <= 1
-    feature_dim = int(math.prod(input_shape)) if input_shape else 1
+    if input_shape:
+        input_feature_dim = int(math.prod(input_shape))
+    else:
+        input_feature_dim = int(train_features.reshape(train_features.size(0), -1).shape[1])
+
+    model_feature_dim = (
+        int(model_feature_dim_meta)
+        if model_feature_dim_meta is not None
+        else input_feature_dim
+    )
 
     device = torch.device(args.device)
     classifier, classifier_info = build_classifier(
         model_expr=args.model,
         encoder_ratio=args.encoder_ratio,
-        feature_dim=feature_dim,
+        input_feature_dim=input_feature_dim,
+        model_feature_dim=model_feature_dim,
         num_classes=num_classes,
         device=device,
         dataset_is_flat=dataset_is_flat,
@@ -321,7 +336,8 @@ def main():
                 "momentum": args.momentum,
                 "weight_decay": args.weight_decay,
                 "num_classes": num_classes,
-                "feature_dim": feature_dim,
+                "model_feature_dim": model_feature_dim,
+                "input_feature_dim": input_feature_dim,
                 "train_samples": int(train_features.size(0)),
                 "test_samples": int(test_features.size(0)),
                 "dataset_dir": args.dataset_dir,

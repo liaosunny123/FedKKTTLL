@@ -182,10 +182,14 @@ def main():
     test_labels_per_client = []
     train_shapes_per_client = []
     test_shapes_per_client = []
+    model_feature_dim = None
 
     for cid in client_ids:
         print(f"\n====== 处理客户端 {cid} ======")
         model = load_client_model(args.run_dir, cid, device)
+
+        if model_feature_dim is None and hasattr(model, "feature_dim"):
+            model_feature_dim = int(getattr(model, "feature_dim"))
 
         if args.encoder_ratio is not None and hasattr(model, "update_split_ratio"):
             model.update_split_ratio(args.encoder_ratio)
@@ -254,6 +258,7 @@ def main():
         "test_original_shapes_per_client": test_shapes_per_client,
         "train_feature_shape_before_flatten": global_train_shape,
         "test_feature_shape_before_flatten": global_test_shape,
+        "model_feature_dim": model_feature_dim,
     }
 
     save_feature_datasets(

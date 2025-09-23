@@ -8,7 +8,7 @@
 # ======== 基础路径设置 ========
 RUN_DIR="./temp/Cifar10/FedEXT/base"   # 修改为实际的运行目录
 OUTPUT_DIR=""                                   # 可选：覆盖默认输出目录 (默认 RUN_DIR/clients-feature)
-KEEP_SPATIAL=0                                   # 1=保留卷积特征张量, 0=保存为扁平向量
+KEEP_SPATIAL=1                                   # 1=保留卷积特征张量, 0=保存为扁平向量
 
 # ======== 数据与模型配置 ========
 DATASET="Cifar10"

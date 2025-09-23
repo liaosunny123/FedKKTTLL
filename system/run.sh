@@ -6,12 +6,12 @@
 # ========================================
 
 # ======== 基础路径配置 ========
-DATASET_DIR="../clients-feature"  # 修改为实际的 clients-feature 目录
+DATASET_DIR="./temp/Cifar10/FedEXT/base/clients-feature"  # 修改为实际的 clients-feature 目录
 SAVE_PATH=""                      # 可选：保存训练好的分类器 (例如 tail_resnet34.pt)
 
 # ======== 模型与切分设置 ========
 MODEL_EXPR="torchvision.models.resnet34(pretrained=False, num_classes=args.num_classes)"
-ENCODER_RATIO=0.7           # 与联邦训练时保持一致，必要时可调整
+ENCODER_RATIO=0.2           # 与联邦训练时保持一致，必要时可调整
 
 # ======== 训练超参数 ========
 BATCH_SIZE=64

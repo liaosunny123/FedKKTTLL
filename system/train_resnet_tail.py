@@ -80,14 +80,23 @@ def build_classifier(
     def is_head_layer(name: str) -> bool:
         return name.startswith("head")
 
-    tail_requires_spatial = False
+    first_local_requires_spatial = False
+    unresolved_spatial_tail = False
     if fedext_model.local_layers:
         first_local_name, _ = fedext_model.local_layers[0]
-        tail_requires_spatial = (
-            original_feature_shape is not None
-            and len(original_feature_shape) > 1
-            and not is_head_layer(first_local_name)
-        )
+        first_local_requires_spatial = not is_head_layer(first_local_name)
+
+    can_reconstruct_shape = original_feature_shape is not None and len(original_feature_shape) > 1
+    if first_local_requires_spatial and not can_reconstruct_shape:
+        unresolved_spatial_tail = True
+
+    tail_requires_spatial = first_local_requires_spatial and can_reconstruct_shape
+
+    if unresolved_spatial_tail:
+        if total_layers > 0:
+            fedext_model.set_layer_split(total_layers - 1)
+            fallback_applied = True
+        tail_requires_spatial = False
 
     if tail_requires_spatial and dataset_is_flat:
         if force_linear_projection and original_feature_shape is not None:
@@ -166,7 +175,7 @@ def prepare_features_for_classifier(features, info, device):
             feats = torch.flatten(feats, 1)
     elif tail_type == "conv_native":
         if feats.ndim == 2 and expected_shape is not None:
-            feats = feats.view(feats.size(0), *expected_shape)
+            feats = feats.reshape(feats.size(0), *expected_shape)
 
     return feats
 
@@ -264,6 +273,8 @@ def main():
         print("实际参与训练的尾部层:")
         for name in classifier_info["final_local_layers"]:
             print(f"  - {name}")
+    if args.force_linear_projection and not classifier_info["projection_added"] and tail_type == "head":
+        print("提示: 已开启线性映射选项，但由于缺少卷积特征形状信息，仍退回到线性分类头。")
     print(f"尾部总参数量: {tail_param_count:,}")
     total_layers = classifier_info["total_layers"]
     orig_index = classifier_info["original_split_index"]
@@ -273,7 +284,8 @@ def main():
             print(f"原始切分位置: {orig_index}/{total_layers} (比例约 {orig_index/total_layers:.2f})")
         if final_index is not None and final_index != orig_index:
             print(f"实际切分位置: {final_index}/{total_layers} (比例约 {final_index/total_layers:.2f})")
-    print(f"输入特征形状: {input_shape_for_log if input_shape_for_log else ['flattened']} (扁平存储: {'是' if dataset_is_flat else '否'})")
+    shape_str = str(input_shape_for_log) if input_shape_for_log else "[flattened]"
+    print(f"输入特征形状: {shape_str} (扁平存储: {'是' if dataset_is_flat else '否'})")
     if classifier_info.get("requires_flatten_input"):
         print("输入特征将自动展平成二维后再送入尾部模型。")
     if classifier_info.get("requires_reshape_input") and classifier_info.get("original_feature_shape"):

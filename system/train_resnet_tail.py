@@ -273,6 +273,7 @@ def main():
             print(f"原始切分位置: {orig_index}/{total_layers} (比例约 {orig_index/total_layers:.2f})")
         if final_index is not None and final_index != orig_index:
             print(f"实际切分位置: {final_index}/{total_layers} (比例约 {final_index/total_layers:.2f})")
+    print(f"输入特征形状: {input_shape_for_log if input_shape_for_log else ['flattened']} (扁平存储: {'是' if dataset_is_flat else '否'})")
     if classifier_info.get("requires_flatten_input"):
         print("输入特征将自动展平成二维后再送入尾部模型。")
     if classifier_info.get("requires_reshape_input") and classifier_info.get("original_feature_shape"):

@@ -58,12 +58,16 @@ def build_classifier(model_expr, encoder_ratio, feature_dim, num_classes, device
     fedext_model = FedEXTModel(dummy_args, 0)
 
     # Ensure the split does not expose convolutional layers to the classifier when using flattened features
+    original_local_layers = [name for name, _ in (fedext_model.local_layers or [])]
+    original_split_index = getattr(fedext_model, "layer_split_index", None)
+    fallback_applied = False
     if fedext_model.local_layers and len(fedext_model.local_layers) > 0:
         first_local_name, _ = fedext_model.local_layers[0]
         if "layer" in first_local_name and "base" in first_local_name:
             total_layers = len(fedext_model.layers_list)
             protected_index = total_layers - 1  # Keep only head as local part
             fedext_model.set_layer_split(protected_index)
+            fallback_applied = True
 
     local_modules = []
     for _, layer in fedext_model.local_layers:
@@ -74,7 +78,17 @@ def build_classifier(model_expr, encoder_ratio, feature_dim, num_classes, device
 
     classifier = nn.Sequential(*local_modules) if len(local_modules) > 1 else local_modules[0]
     classifier = classifier.to(device)
-    return classifier
+    final_local_layers = [name for name, _ in fedext_model.local_layers]
+    final_split_index = getattr(fedext_model, "layer_split_index", None)
+    info = {
+        "original_local_layers": original_local_layers,
+        "final_local_layers": final_local_layers,
+        "fallback_applied": fallback_applied,
+        "original_split_index": original_split_index,
+        "final_split_index": final_split_index,
+        "total_layers": len(fedext_model.layers_list or []),
+    }
+    return classifier, info
 
 
 def create_dataloaders(train_features, train_labels, batch_size):
@@ -129,13 +143,37 @@ def main():
         test_features = test_features.view(test_features.size(0), -1)
 
     device = torch.device(args.device)
-    classifier = build_classifier(
+    classifier, classifier_info = build_classifier(
         model_expr=args.model,
         encoder_ratio=args.encoder_ratio,
         feature_dim=feature_dim,
         num_classes=num_classes,
         device=device,
     )
+
+    tail_param_count = sum(p.numel() for p in classifier.parameters())
+    print("\n=== 尾部模型信息 ===")
+    if classifier_info["fallback_applied"]:
+        print("检测到原始切分包含卷积层，已自动回退为仅训练分类头。")
+    else:
+        print("使用原始切分的尾部层进行训练。")
+    if classifier_info["original_local_layers"]:
+        print("原始尾部层:")
+        for name in classifier_info["original_local_layers"]:
+            print(f"  - {name}")
+    if classifier_info["final_local_layers"]:
+        print("实际参与训练的尾部层:")
+        for name in classifier_info["final_local_layers"]:
+            print(f"  - {name}")
+    print(f"尾部总参数量: {tail_param_count:,}")
+    total_layers = classifier_info["total_layers"]
+    orig_index = classifier_info["original_split_index"]
+    final_index = classifier_info["final_split_index"]
+    if total_layers:
+        if orig_index is not None:
+            print(f"原始切分位置: {orig_index}/{total_layers} (比例约 {orig_index/total_layers:.2f})")
+        if final_index is not None and final_index != orig_index:
+            print(f"实际切分位置: {final_index}/{total_layers} (比例约 {final_index/total_layers:.2f})")
 
     sample_input = train_features[:2].to(device)
     try:
@@ -172,6 +210,12 @@ def main():
                 "test_samples": int(test_features.size(0)),
                 "dataset_dir": args.dataset_dir,
                 "model": args.model,
+                "tail_param_count": tail_param_count,
+                "tail_layers": classifier_info["final_local_layers"],
+                "tail_fallback": classifier_info["fallback_applied"],
+                "tail_original_layers": classifier_info["original_local_layers"],
+                "tail_original_split_index": classifier_info["original_split_index"],
+                "tail_final_split_index": classifier_info["final_split_index"],
             },
         )
         wandb.define_metric("Server/step")

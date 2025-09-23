@@ -70,7 +70,10 @@ def load_client_model(run_dir, client_id, device):
     path = os.path.join(run_dir, f"Client_{client_id}_model.pt")
     if not os.path.exists(path):
         raise FileNotFoundError(f"未找到客户端 {client_id} 模型文件: {path}")
-    model = torch.load(path, map_location=device)
+    try:
+        model = torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        model = torch.load(path, map_location=device)
     model.to(device)
     model.eval()
     return model

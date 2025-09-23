@@ -1,4 +1,6 @@
 import time
+import os
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -410,7 +412,90 @@ class FedEXT(Server):
     def send_models(self):
         """Models are already distributed in aggregate_models_layer_wise"""
         pass
-    
+
+    def _save_feature_datasets(
+        self,
+        train_embeddings,
+        train_labels,
+        test_embeddings,
+        test_labels,
+        balanced_test_embeddings,
+        balanced_test_labels,
+        train_embeddings_per_client,
+        train_labels_per_client,
+        test_embeddings_per_client,
+        test_labels_per_client,
+        balanced_samples_per_client,
+    ):
+        """Persist aggregated client feature datasets for offline debugging."""
+
+        dataset_dir = os.path.join(self.save_folder_name, "clients-feature")
+        os.makedirs(dataset_dir, exist_ok=True)
+
+        def _cpu_copy(tensor):
+            return tensor.detach().cpu()
+
+        torch.save(
+            {"features": _cpu_copy(train_embeddings), "labels": _cpu_copy(train_labels)},
+            os.path.join(dataset_dir, "global_train_dataset.pt"),
+        )
+
+        torch.save(
+            {"features": _cpu_copy(test_embeddings), "labels": _cpu_copy(test_labels)},
+            os.path.join(dataset_dir, "global_test_dataset.pt"),
+        )
+
+        if balanced_test_embeddings is not None and balanced_test_labels is not None:
+            torch.save(
+                {
+                    "features": _cpu_copy(balanced_test_embeddings),
+                    "labels": _cpu_copy(balanced_test_labels),
+                },
+                os.path.join(dataset_dir, "global_test_balanced_dataset.pt"),
+            )
+
+        per_client_dir = os.path.join(dataset_dir, "per-client")
+        os.makedirs(per_client_dir, exist_ok=True)
+
+        for client, train_feat, train_lab, test_feat, test_lab in zip(
+            self.clients,
+            train_embeddings_per_client,
+            train_labels_per_client,
+            test_embeddings_per_client,
+            test_labels_per_client,
+        ):
+            client_path = os.path.join(per_client_dir, f"client_{client.id:03d}.pt")
+            torch.save(
+                {
+                    "client_id": client.id,
+                    "train_features": _cpu_copy(train_feat),
+                    "train_labels": _cpu_copy(train_lab),
+                    "test_features": _cpu_copy(test_feat),
+                    "test_labels": _cpu_copy(test_lab),
+                },
+                client_path,
+            )
+
+        metadata = {
+            "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "num_clients": len(self.clients),
+            "client_ids": [client.id for client in self.clients],
+            "train_samples": int(train_embeddings.shape[0]),
+            "train_feature_dim": int(train_embeddings.shape[1]) if train_embeddings.ndim > 1 else 1,
+            "test_samples": int(test_embeddings.shape[0]),
+            "test_feature_dim": int(test_embeddings.shape[1]) if test_embeddings.ndim > 1 else 1,
+            "balanced_test_samples": int(balanced_test_embeddings.shape[0]) if balanced_test_embeddings is not None else None,
+            "balanced_test_feature_dim": int(balanced_test_embeddings.shape[1]) if balanced_test_embeddings is not None and balanced_test_embeddings.ndim > 1 else None,
+            "balanced_samples_per_client": int(balanced_samples_per_client) if balanced_samples_per_client is not None else None,
+            "train_samples_per_client": [int(feat.shape[0]) for feat in train_embeddings_per_client],
+            "test_samples_per_client": [int(feat.shape[0]) for feat in test_embeddings_per_client],
+        }
+
+        with open(os.path.join(dataset_dir, "metadata.json"), "w", encoding="utf-8") as meta_file:
+            json.dump(metadata, meta_file, indent=2)
+
+        print(f"Saved client feature datasets to {dataset_dir}")
+
     def build_and_test_global_model(self):
         """
         Build and test a global model by:
@@ -453,7 +538,10 @@ class FedEXT(Server):
             test_features, test_labels = client.extract_test_features_labels()
             test_embeddings_list.append(test_features)
             test_labels_list.append(test_labels)
-        
+
+        full_test_embeddings = torch.cat(test_embeddings_list, dim=0)
+        full_test_labels = torch.cat(test_labels_list, dim=0)
+
         # Balance test set - take equal samples from each client
         min_test_samples = min([emb.shape[0] for emb in test_embeddings_list])
         balanced_test_embeddings = []
@@ -464,10 +552,13 @@ class FedEXT(Server):
             indices = torch.randperm(emb.shape[0])[:min_test_samples]
             balanced_test_embeddings.append(emb[indices])
             balanced_test_labels.append(lab[indices])
-        
-        test_embeddings = torch.cat(balanced_test_embeddings, dim=0)
-        test_labels = torch.cat(balanced_test_labels, dim=0)
-        
+
+        balanced_test_embeddings_tensor = torch.cat(balanced_test_embeddings, dim=0)
+        balanced_test_labels_tensor = torch.cat(balanced_test_labels, dim=0)
+
+        test_embeddings = balanced_test_embeddings_tensor
+        test_labels = balanced_test_labels_tensor
+
         print(f"Built balanced test set with {test_embeddings.shape[0]} samples ({min_test_samples} per client)")
 
         # Log test dataset construction metrics to wandb
@@ -477,6 +568,21 @@ class FedEXT(Server):
                 "Server/embeddings_test_per_client": min_test_samples,
                 "Server/embeddings_test_balance_ratio": min_test_samples * len(self.clients) / test_embeddings.shape[0]
             })
+
+        # Persist datasets for offline debugging
+        self._save_feature_datasets(
+            train_embeddings=train_embeddings,
+            train_labels=train_labels,
+            test_embeddings=full_test_embeddings,
+            test_labels=full_test_labels,
+            balanced_test_embeddings=balanced_test_embeddings_tensor,
+            balanced_test_labels=balanced_test_labels_tensor,
+            train_embeddings_per_client=train_embeddings_list,
+            train_labels_per_client=train_labels_list,
+            test_embeddings_per_client=test_embeddings_list,
+            test_labels_per_client=test_labels_list,
+            balanced_samples_per_client=min_test_samples,
+        )
 
         # Train global classifier (head) on server
         print("\nTraining global classifier on server...")

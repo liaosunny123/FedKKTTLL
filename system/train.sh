@@ -19,7 +19,7 @@ FEATURE_DIM=512           # 特征维度
 # 联邦学习参数
 NUM_CLIENTS=20            # 客户端总数
 JOIN_RATIO=1              # 每轮参与的客户端比例 (0.0-1.0)
-GLOBAL_ROUNDS=100         # 全局训练轮次
+GLOBAL_ROUNDS=50         # 全局训练轮次
 
 # FedEXT参数
 ENCODER_RATIO=0.7       # Encoder层数比例 (0.7表示70%层作为Encoder，30%作为Classifier)

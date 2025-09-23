@@ -22,13 +22,15 @@ def parse_args():
     parser.add_argument("--num-classes", type=int, default=10, help="类别数量")
     parser.add_argument("--output-dir", default=None, help="输出目录，默认为 run-dir/clients-feature")
     parser.add_argument("--seed", type=int, default=0, help="随机种子，用于平衡测试集采样")
+    parser.add_argument("--keep-spatial", action="store_true", help="保留卷积特征张量，不进行 flatten")
     return parser.parse_args()
 
 
-def extract_features(model, dataloader, device):
+def extract_features(model, dataloader, device, keep_spatial):
     features_list = []
     labels_list = []
     model.eval()
+    sample_shape = None
 
     with torch.no_grad():
         for batch in dataloader:
@@ -52,18 +54,21 @@ def extract_features(model, dataloader, device):
             if isinstance(feat, tuple):
                 feat = feat[0]
 
-            if len(feat.shape) > 2:
+            if sample_shape is None:
+                sample_shape = tuple(feat.shape[1:])
+
+            if not keep_spatial and len(feat.shape) > 2:
                 feat = torch.flatten(feat, 1)
 
             features_list.append(feat.cpu())
             labels_list.append(y.cpu())
 
     if not features_list:
-        return torch.empty((0, model.feature_dim if hasattr(model, "feature_dim") else 0)), torch.empty((0,), dtype=torch.long)
+        return torch.empty((0,)), torch.empty((0,), dtype=torch.long), sample_shape
 
     features = torch.cat(features_list, dim=0)
     labels = torch.cat(labels_list, dim=0)
-    return features, labels
+    return features, labels, sample_shape
 
 
 def load_client_model(run_dir, client_id, device):
@@ -175,6 +180,8 @@ def main():
     train_labels_per_client = []
     test_features_per_client = []
     test_labels_per_client = []
+    train_shapes_per_client = []
+    test_shapes_per_client = []
 
     for cid in client_ids:
         print(f"\n====== 处理客户端 {cid} ======")
@@ -196,15 +203,17 @@ def main():
             print(f"  使用模型内保存的切分: index={split_index}/{total_layers}, ratio≈{encoder_ratio:.2f}")
 
         train_loader = prepare_dataloader(args.dataset, cid, args.batch_size, distribution_manager, args.num_classes, is_train=True)
-        train_feat, train_lab = extract_features(model, train_loader, device)
+        train_feat, train_lab, train_shape = extract_features(model, train_loader, device, args.keep_spatial)
 
         test_loader = prepare_dataloader(args.dataset, cid, args.batch_size, distribution_manager, args.num_classes, is_train=False)
-        test_feat, test_lab = extract_features(model, test_loader, device)
+        test_feat, test_lab, test_shape = extract_features(model, test_loader, device, args.keep_spatial)
 
         train_features_per_client.append(train_feat)
         train_labels_per_client.append(train_lab)
         test_features_per_client.append(test_feat)
         test_labels_per_client.append(test_lab)
+        train_shapes_per_client.append(list(train_shape) if train_shape is not None else None)
+        test_shapes_per_client.append(list(test_shape) if test_shape is not None else None)
 
         print(f"  训练样本: {train_feat.shape[0]}, 测试样本: {test_feat.shape[0]}")
 
@@ -229,6 +238,9 @@ def main():
         balanced_test_embeddings = torch.cat(balanced_emb_list, dim=0)
         balanced_test_labels = torch.cat(balanced_lab_list, dim=0)
 
+    global_train_shape = next((shape for shape in train_shapes_per_client if shape is not None), None)
+    global_test_shape = next((shape for shape in test_shapes_per_client if shape is not None), None)
+
     extra_metadata = {
         "dataset": args.dataset,
         "num_clients": args.num_clients,
@@ -237,6 +249,11 @@ def main():
         "batch_size": args.batch_size,
         "device": args.device,
         "seed": args.seed,
+        "flattened": not args.keep_spatial,
+        "train_original_shapes_per_client": train_shapes_per_client,
+        "test_original_shapes_per_client": test_shapes_per_client,
+        "train_feature_shape_before_flatten": global_train_shape,
+        "test_feature_shape_before_flatten": global_test_shape,
     }
 
     save_feature_datasets(

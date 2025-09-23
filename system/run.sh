@@ -21,6 +21,7 @@ MOMENTUM=0.9
 WEIGHT_DECAY=1e-4
 DEVICE="cuda"               # 根据需要改为 cpu
 USE_BALANCED_TEST=1         # 1=使用平衡测试集，0=使用完整测试集
+FORCE_LINEAR_PROJECTION=0  # 1=保留卷积尾部并用线性层映射输入维度
 
 # ======== WandB 配置 ========
 USE_WANDB=1                 # 1=开启日志，0=关闭
@@ -47,6 +48,7 @@ echo "批次大小    : $BATCH_SIZE"
 echo "总轮次      : $EPOCHS"
 echo "学习率      : $LEARNING_RATE"
 echo "设备        : $DEVICE"
+echo "线性映射尾部 : $( [ "$FORCE_LINEAR_PROJECTION" -eq 1 ] && echo 是 || echo 否 )"
 if [ "$USE_WANDB" -eq 1 ]; then
     echo "WandB 项目  : $WANDB_PROJECT/$WANDB_ENTITY"
     echo "运行名称    : $WANDB_RUN_NAME"
@@ -83,6 +85,10 @@ fi
 
 if [ -n "$SAVE_PATH" ]; then
     CMD="$CMD --save-path \"$SAVE_PATH\""
+fi
+
+if [ "$FORCE_LINEAR_PROJECTION" -eq 1 ]; then
+    CMD="$CMD --force-linear-projection"
 fi
 
 # ========================================

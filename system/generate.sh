@@ -8,6 +8,7 @@
 # ======== 基础路径设置 ========
 RUN_DIR="./temp/Cifar10/FedEXT/base"   # 修改为实际的运行目录
 OUTPUT_DIR=""                                   # 可选：覆盖默认输出目录 (默认 RUN_DIR/clients-feature)
+KEEP_SPATIAL=0                                   # 1=保留卷积特征张量, 0=保存为扁平向量
 
 # ======== 数据与模型配置 ========
 DATASET="Cifar10"
@@ -54,6 +55,7 @@ if [ -n "$DISTRIBUTION_CONFIG" ]; then
     echo "数据分布配置  : $DISTRIBUTION_CONFIG"
 fi
 echo "输出目录      : ${OUTPUT_DIR:-默认 (RUN_DIR/clients-feature)}"
+echo "保留卷积特征  : $( [ "$KEEP_SPATIAL" -eq 1 ] && echo 是 || echo 否 )"
 echo "随机种子      : $SEED"
 echo "========================================="
 
@@ -83,6 +85,10 @@ fi
 
 if [ -n "$DISTRIBUTION_CONFIG" ]; then
     CMD="$CMD --distribution-config \"$DISTRIBUTION_CONFIG\""
+fi
+
+if [ "$KEEP_SPATIAL" -eq 1 ]; then
+    CMD="$CMD --keep-spatial"
 fi
 
 # ========================================

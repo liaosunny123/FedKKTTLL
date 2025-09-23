@@ -182,6 +182,18 @@ def main():
 
         if args.encoder_ratio is not None and hasattr(model, "update_split_ratio"):
             model.update_split_ratio(args.encoder_ratio)
+        elif hasattr(model, "layer_split_index") and hasattr(model, "layers_list"):
+            total_layers = len(getattr(model, "layers_list", []))
+            current_split = getattr(model, "layer_split_index", None)
+            if current_split is not None and total_layers:
+                ratio = current_split / total_layers
+                print(f"  使用模型内保存的切分: index={current_split}/{total_layers}, ratio≈{ratio:.2f}")
+        elif hasattr(model, "get_split_info"):
+            info = model.get_split_info()
+            split_index = info.get("split_index")
+            total_layers = info.get("total_layers")
+            encoder_ratio = info.get("encoder_ratio")
+            print(f"  使用模型内保存的切分: index={split_index}/{total_layers}, ratio≈{encoder_ratio:.2f}")
 
         train_loader = prepare_dataloader(args.dataset, cid, args.batch_size, distribution_manager, args.num_classes, is_train=True)
         train_feat, train_lab = extract_features(model, train_loader, device)

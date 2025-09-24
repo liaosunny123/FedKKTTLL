@@ -19,7 +19,7 @@ DEVICE="cuda"
 SEED=0
 
 # 如果想覆盖训练时的切分比例，设置 ENCODER_RATIO，例如 0.7；留空则沿用模型内记录
-ENCODER_RATIO=""
+ENCODER_RATIO="0.2"
 
 # 可选：数据分布配置（需与训练时一致）
 DISTRIBUTION_CONFIG=""

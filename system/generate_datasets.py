@@ -188,8 +188,11 @@ def main():
         print(f"\n====== 处理客户端 {cid} ======")
         model = load_client_model(args.run_dir, cid, device)
 
-        if model_feature_dim is None and hasattr(model, "feature_dim"):
-            model_feature_dim = int(getattr(model, "feature_dim"))
+        if model_feature_dim is None:
+            if hasattr(model, "head") and hasattr(model.head, "in_features"):
+                model_feature_dim = int(model.head.in_features)
+            elif hasattr(model, "feature_dim"):
+                model_feature_dim = int(getattr(model, "feature_dim"))
 
         if args.encoder_ratio is not None and hasattr(model, "update_split_ratio"):
             model.update_split_ratio(args.encoder_ratio)

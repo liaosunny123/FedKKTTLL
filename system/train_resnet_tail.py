@@ -120,14 +120,72 @@ def build_classifier(
         )
         local_modules.append(projection)
 
-    for _, layer in fedext_model.local_layers:
-        local_modules.append(copy.deepcopy(layer))
+    flatten_inserted = False
+    for layer_name, layer in fedext_model.local_layers:
+        copied_layer = copy.deepcopy(layer)
+        local_modules.append(copied_layer)
+
+        if (
+            fedext_model.model_type == "resnet"
+            and "avgpool" in layer_name
+        ):
+            local_modules.append(nn.Flatten(start_dim=1))
+            flatten_inserted = True
 
     if len(local_modules) == 0:
         raise ValueError("No local layers found after splitting; check encoder_ratio")
 
     classifier = nn.Sequential(*local_modules) if len(local_modules) > 1 else local_modules[0]
     classifier = classifier.to(device)
+
+    # Adjust linear head input features if downstream layers changed spatial dimensions.
+    final_linear = None
+    if isinstance(classifier, nn.Sequential):
+        maybe_linear = list(classifier.children())[-1]
+        if isinstance(maybe_linear, nn.Linear):
+            final_linear = maybe_linear
+    elif isinstance(classifier, nn.Linear):
+        final_linear = classifier
+
+    head_dim_adjusted_from = None
+    if final_linear is not None:
+        sample_shape = None
+        if not dataset_is_flat and tail_requires_spatial:
+            sample_shape = original_feature_shape or input_shape
+        else:
+            sample_shape = (input_feature_dim,)
+
+        if sample_shape and all(dim is not None for dim in sample_shape):
+            dummy = torch.zeros((1, *sample_shape), device=device)
+            training_state = classifier.training
+            classifier.eval()
+            with torch.no_grad():
+                if isinstance(classifier, nn.Sequential) and len(classifier) > 1:
+                    features_before_head = classifier[:-1](dummy)
+                else:
+                    features_before_head = dummy
+            classifier.train(training_state)
+
+            if isinstance(features_before_head, torch.Tensor):
+                flattened = features_before_head.reshape(features_before_head.size(0), -1)
+                actual_dim = flattened.size(1)
+                if actual_dim != final_linear.in_features:
+                    head_dim_adjusted_from = final_linear.in_features
+                    new_linear = nn.Linear(actual_dim, final_linear.out_features, bias=final_linear.bias is not None).to(device)
+                    if final_linear.bias is not None:
+                        with torch.no_grad():
+                            new_linear.bias.copy_(final_linear.bias.detach())
+                    if isinstance(classifier, nn.Sequential):
+                        classifier[-1] = new_linear
+                    else:
+                        classifier = new_linear
+                    final_linear = new_linear
+
+    current_head_dim = None
+    if final_linear is not None:
+        current_head_dim = final_linear.in_features
+    else:
+        current_head_dim = model_feature_dim
 
     if projection_added:
         tail_type = "conv_with_projection"
@@ -148,12 +206,17 @@ def build_classifier(
         "dataset_is_flat": dataset_is_flat,
         "input_shape": input_shape,
         "original_feature_shape": tuple(original_feature_shape) if original_feature_shape else None,
-        "model_feature_dim": model_feature_dim,
+        "model_feature_dim": current_head_dim,
         "input_feature_dim": input_feature_dim,
         "requires_flatten_input": False,
         "requires_reshape_input": False,
         "projection_shape": tuple(original_feature_shape) if projection_added else None,
     }
+
+    if head_dim_adjusted_from is not None:
+        info["head_in_features_adjusted_from"] = head_dim_adjusted_from
+        info["head_in_features_adjusted_to"] = current_head_dim
+    info["flatten_inserted_after_avgpool"] = flatten_inserted
 
     if tail_type in ("head", "conv_with_projection") and not dataset_is_flat:
         info["requires_flatten_input"] = True
@@ -301,10 +364,15 @@ def main():
             print(f"实际切分位置: {final_index}/{total_layers} (比例约 {final_index/total_layers:.2f})")
     shape_str = str(input_shape_for_log) if input_shape_for_log else "[flattened]"
     print(f"输入特征形状: {shape_str} (扁平存储: {'是' if dataset_is_flat else '否'})")
+    print(f"尾部期望向量维度: {classifier_info['model_feature_dim']}")
     if classifier_info.get("requires_flatten_input"):
         print("输入特征将自动展平成二维后再送入尾部模型。")
     if classifier_info.get("requires_reshape_input") and classifier_info.get("original_feature_shape"):
         print(f"输入特征将在训练/评估前重塑为 {classifier_info['original_feature_shape']}。")
+    if classifier_info.get("head_in_features_adjusted_from") is not None:
+        old_dim = classifier_info["head_in_features_adjusted_from"]
+        new_dim = classifier_info.get("head_in_features_adjusted_to", old_dim)
+        print(f"检测到分类头输入维度不匹配，已自动从 {old_dim} 调整为 {new_dim}。")
 
     sample_input = prepare_features_for_classifier(train_features[:2], classifier_info, device)
     try:

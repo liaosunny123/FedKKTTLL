@@ -458,6 +458,8 @@ def main():
         avg_loss = running_loss / total
         train_acc = correct / total
 
+        test_acc = evaluate(classifier, test_features, test_labels, device, classifier_info)
+
         if args.use_wandb:
             wandb.log(
                 {
@@ -465,21 +467,25 @@ def main():
                     "Server/classifier_epoch": epoch,
                     "Server/classifier_train_loss": avg_loss,
                     "Server/classifier_train_accuracy": train_acc,
+                    "Server/global_model_test_accuracy": test_acc,
                     "Server/classifier_learning_rate": args.learning_rate,
                 }
             )
 
-        print(f"Epoch {epoch + 1}/{args.epochs}: loss={avg_loss:.4f}, acc={train_acc:.4f}")
+        print(
+            f"Epoch {epoch + 1}/{args.epochs}: loss={avg_loss:.4f}, "
+            f"train_acc={train_acc:.4f}, test_acc={test_acc:.4f}"
+        )
 
-    test_accuracy = evaluate(classifier, test_features, test_labels, device, classifier_info)
+    final_test_acc = evaluate(classifier, test_features, test_labels, device, classifier_info)
 
-    print(f"Test accuracy: {test_accuracy:.4f} on {test_labels.size(0)} samples")
+    print(f"Final test accuracy: {final_test_acc:.4f} on {test_labels.size(0)} samples")
 
     if args.use_wandb:
         wandb.log(
             {
                 "Server/step": args.epochs,
-                "Server/global_model_test_accuracy": test_accuracy,
+                "Server/global_model_test_accuracy": final_test_acc,
                 "Server/global_model_test_samples": int(test_labels.size(0)),
                 "Server/global_model_train_samples": int(train_labels.size(0)),
                 "Server/balanced_samples_per_client": metadata.get("balanced_samples_per_client"),

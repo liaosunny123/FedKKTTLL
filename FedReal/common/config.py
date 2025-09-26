@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 @dataclass
 class FedConfig:
@@ -15,6 +16,11 @@ class FedConfig:
     max_message_mb: int = 128
     num_classes: int = 10
     encoder_ratio: float = 1.0
+    algorithm: str = "FedEXT"
+    use_wandb: bool = False
+    wandb_project: Optional[str] = None
+    wandb_entity: Optional[str] = None
+    wandb_run_name: Optional[str] = None
 
     def to_dict(self):
         return self.__dict__.copy()

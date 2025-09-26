@@ -170,14 +170,23 @@ class FedEXTModel(BaseHeadSplit):
             self._build_sequential_model()
         
         total_layers = len(self.layers_list)
-        # Calculate split index based on ratio
-        split_index = int(math.ceil(total_layers * ratio))
-        
-        # Ensure at least one layer is local (the head)
-        split_index = min(split_index, total_layers - 1)
-        
+
+        if total_layers == 0:
+            self.set_layer_split(0)
+            return
+
+        if ratio >= 1.0:
+            # 纯 FedAvg：所有层都参与全局聚合
+            split_index = total_layers
+        elif ratio <= 0.0:
+            # 纯本地：所有层都留在客户端
+            split_index = 0
+        else:
+            split_index = int(math.ceil(total_layers * ratio))
+            split_index = max(1, min(split_index, total_layers - 1))
+
         self.set_layer_split(split_index)
-        
+
         print(f"[Client {self.cid}] Auto-split at layer {split_index}/{total_layers} (ratio={ratio:.2f})")
 
     def set_layer_split(self, layer_split_index):
@@ -238,11 +247,16 @@ class FedEXTModel(BaseHeadSplit):
         
         # Extract parameters from global layers
         for layer_name, layer in self.global_layers:
+            # Aggregate parameters
             for param_name, param in layer.named_parameters():
                 full_name = f"{layer_name}.{param_name}"
-                # Remove prefix for compatibility with server aggregation
-                clean_name = full_name.replace("base.", "").replace("head.", "")
+                clean_name = full_name.replace("base.", "")
                 global_dict[clean_name] = param.data.clone()
+            # Aggregate buffers such as BatchNorm running stats to mimic FedAvg behaviour
+            for buffer_name, buffer in layer.named_buffers():
+                full_name = f"{layer_name}.{buffer_name}"
+                clean_name = full_name.replace("base.", "")
+                global_dict[clean_name] = buffer.data.clone()
         
         return global_dict
 
@@ -257,9 +271,12 @@ class FedEXTModel(BaseHeadSplit):
         for layer_name, layer in self.local_layers:
             for param_name, param in layer.named_parameters():
                 full_name = f"{layer_name}.{param_name}"
-                # Remove prefix for compatibility with server aggregation
-                clean_name = full_name.replace("base.", "").replace("head.", "")
+                clean_name = full_name.replace("base.", "")
                 local_dict[clean_name] = param.data.clone()
+            for buffer_name, buffer in layer.named_buffers():
+                full_name = f"{layer_name}.{buffer_name}"
+                clean_name = full_name.replace("base.", "")
+                local_dict[clean_name] = buffer.data.clone()
         
         return local_dict
 

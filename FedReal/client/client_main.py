@@ -1,9 +1,11 @@
 import argparse
 import time
+from pathlib import Path
+
 import grpc
 import torch
 import logging
-import collections
+from typing import Optional
 
 
 from proto import fed_pb2, fed_pb2_grpc
@@ -37,6 +39,9 @@ def main():
                         help="Dataloader workers (None = auto)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--encoder_ratio", type=float, default=1.0)
+    parser.add_argument("--algorithm", type=str, default="FedEXT")
+    parser.add_argument("--run_dir", type=str, default=None,
+                        help="Optional directory to store the final aggregated model copy")
     
     args = parser.parse_args()
 
@@ -61,7 +66,9 @@ def main():
     group_index = reg.group_index
     cfg = reg.config
 
-    logger.info(f"[Client {client_id}] index={client_index}; device={args.device}")
+    logger.info(
+        f"[Client {client_id}] index={client_index}; group={group_index}; device={args.device}"
+    )
 
     train_loader, test_loader = client_data_loader(args.data_root, args.dataset_name, client_index, args.batch_size)
 
@@ -84,11 +91,10 @@ def main():
     client_post_eval_loss = []
 
     # 主循环
-    uploaded_round = set()
     last_round = -1
-    train_size = len(train_loader)
+    train_size = len(train_loader.dataset)
     
-    model = None    
+    model: Optional[FedEXTModel] = None
 
     while True:
         task = stub.GetTask(fed_pb2.GetTaskRequest(client_id=client_id))
@@ -98,14 +104,30 @@ def main():
             logger.info("Training timer started.")
 
         if task.round >= cfg.total_rounds:
-            logger.info(f"[Client {client_id}] All rounds finished.")
+            logger.info(f"[Client {client_id}] All rounds finished at round {task.round}.")
+            if task.global_model:
+                if model is None:
+                    model = FedEXTModel(
+                        client_index,
+                        cfg.model_name,
+                        args.feature_dim,
+                        args.num_classes,
+                        args.encoder_ratio,
+                    ).to(device)
+                state_dict = bytes_to_state_dict(task.global_model)
+                model.load_state_dict(state_dict, strict=False)
+                if args.run_dir:
+                    run_dir = Path(args.run_dir).expanduser().resolve()
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    save_path = run_dir / f"client_{client_index:03d}_final.pt"
+                    torch.save(model.state_dict(), save_path)
+                    logger.info(f"[Client {client_id}] Saved final model to {save_path}")
             if start_time is not None and end_time is None:
                 end_time = time.time()
                 elapsed = end_time - start_time
-                logger.info(f"[Client {client_id}] Total training time: {elapsed:.2f}s "
-                            f"({elapsed/60:.2f} min)")
-                logger.info(f"[Client {client_id}] total acc : {client_eval_acc}")
-                logger.info(f"[Client {client_id}] total loss : {client_eval_loss}")
+                logger.info(
+                    f"[Client {client_id}] Total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)"
+                )
             break
 
         if task.round != last_round:
@@ -113,27 +135,42 @@ def main():
             last_round = task.round
 
         if not task.participate:
+            if task.global_model:
+                if model is None:
+                    model = FedEXTModel(
+                        client_index,
+                        cfg.model_name,
+                        args.feature_dim,
+                        args.num_classes,
+                        args.encoder_ratio,
+                    ).to(device)
+                state_dict = bytes_to_state_dict(task.global_model)
+                model.load_state_dict(state_dict, strict=False)
             time.sleep(1.0)
             continue
 
         # 拉取并加载全局模型
         # model = create_model(task.config.model_name, num_classes=args.num_classes).to(device)
-        if not model:
-            model = FedEXTModel(client_index, task.config.model_name, args.feature_dim, args.num_classes, args.encoder_ratio).to(device)
+        if model is None:
+            model = FedEXTModel(
+                client_index,
+                task.config.model_name,
+                args.feature_dim,
+                args.num_classes,
+                args.encoder_ratio,
+            ).to(device)
         state_dict = bytes_to_state_dict(task.global_model)
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=False)
 
         pre_test_loss, pre_test_acc = evaluate(model, test_loader, device=device)
         logger.info(f"[Client {client_id}][Round {task.round}] (pre-trained) test_acc={pre_test_acc:.4f}")
         client_pre_eval_acc.append(pre_test_acc)
         client_pre_eval_loss.append(pre_test_loss)
-
-
         # 本地训练
         optimizer = torch.optim.SGD(model.parameters(), lr=task.config.lr, momentum=task.config.momentum, weight_decay=5e-4)
-        train_loss, train_acc = train_local(model, train_loader, epochs=task.config.local_epochs, optimizer=optimizer, device=device)
+        train_loss_post, train_acc_post = train_local(model, train_loader, epochs=task.config.local_epochs, optimizer=optimizer, device=device)
         test_loss, test_acc = evaluate(model, test_loader, device=device)
-        logger.info(f"[Client {client_id}][Round {task.round}] (post-trained) train_acc={train_acc:.4f} test_acc={test_acc:.4f}")
+        logger.info(f"[Client {client_id}][Round {task.round}] (post-trained) train_acc={train_acc_post:.4f} test_acc={test_acc:.4f}")
 
         client_post_eval_acc.append(test_acc)
         client_post_eval_loss.append(test_loss)
@@ -147,7 +184,10 @@ def main():
                 round=task.round,
                 local_model=local_bytes,
                 num_samples=train_size,
-                test_acc=pre_test_acc,
+                train_loss=pre_test_loss,
+                train_acc=pre_test_acc,
+                test_loss=test_loss,
+                test_acc=test_acc,
             )
         )
 
@@ -158,8 +198,7 @@ def main():
             # 如果被拒绝（比如轮次错位），稍后重试
             time.sleep(1.0)
 
-    print("Client pre acc : {client_pre_eval_acc}")
-    print("Client post acc : {client_post_eval_acc}")
+    print(f"Client pre acc : {client_pre_eval_acc}")
+    print(f"Client post acc : {client_post_eval_acc}")
 if __name__ == "__main__":
     main()
-

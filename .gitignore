@@ -158,6 +158,9 @@ system/stable-diffusion/
 system/stylegan/
 system/temp/
 dataset/
+FedReal/dataset/
+FedReal/runs/
+
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

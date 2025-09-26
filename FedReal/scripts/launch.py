@@ -66,7 +66,7 @@ def kill_proc_tree(proc):
     except Exception:
         pass
 
-def build_server_cmd(args):
+def build_server_cmd(args, run_dir: str):
     py = sys.executable
     cmd = line_buffer_prefix() + [
         py, "-m", "server.server_main",
@@ -84,11 +84,23 @@ def build_server_cmd(args):
         "--seed", str(args.seed),
         "--model_name", args.model_name,
         "--max_message_mb", str(args.max_message_mb),
+        "--feature_dim", str(args.feature_dim),
+        "--encoder_ratio", str(args.encoder_ratio),
+        "--algorithm", args.algorithm,
+        "--run_dir", run_dir,
     ]
     if args.device:
         cmd += ["--device", args.device]
     if args.num_workers is not None:
         cmd += ["--num_workers", str(args.num_workers)]
+    if args.use_wandb:
+        cmd.append("--use_wandb")
+        if args.wandb_project:
+            cmd += ["--wandb_project", args.wandb_project]
+        if args.wandb_entity:
+            cmd += ["--wandb_entity", args.wandb_entity]
+        if args.wandb_run_name:
+            cmd += ["--wandb_run_name", args.wandb_run_name]
     return cmd
 
 def build_client_cmd(args, idx: int):
@@ -104,6 +116,9 @@ def build_client_cmd(args, idx: int):
         "--num_clients", str(args.num_clients),
         "--batch_size", str(args.batch_size),
         "--seed", str(args.seed),
+        "--feature_dim", str(args.feature_dim),
+        "--encoder_ratio", str(args.encoder_ratio),
+        "--algorithm", args.algorithm,
     ]
     if args.client_device:
         cmd += ["--device", args.client_device]
@@ -131,6 +146,9 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--model_name", type=str, default="resnet18")
     p.add_argument("--max_message_mb", type=int, default=128)
+    p.add_argument("--feature_dim", type=int, default=512)
+    p.add_argument("--encoder_ratio", type=float, default=1.0)
+    p.add_argument("--algorithm", type=str, default="FedEXT", choices=["FedEXT", "FedAvg"], help="Algorithm name for logging")
     p.add_argument("--device", type=str, default=None, help="Server device override, e.g., cuda or cpu")
     p.add_argument("--client_device", type=str, default=None, help="Client device override, e.g., cpu to save GPU")
     p.add_argument("--num_workers", type=int, default=None, help="DataLoader workers for both server/client (if applicable)")
@@ -146,6 +164,11 @@ def parse_args():
     p.add_argument("--server_warmup_sec", type=float, default=2.0, help="Wait before launching clients")
     p.add_argument("--log_dir", type=str, default="logs")
     p.add_argument("--env_omp1", action="store_true", help="Set OMP/MKL/OPENBLAS threads to 1 to reduce CPU contention")
+    p.add_argument("--run_dir", type=str, default=None, help="Directory for server-side artifacts; defaults to runs/<dataset>/<timestamp>")
+    p.add_argument("--use_wandb", action="store_true", help="Enable wandb logging for server and clients")
+    p.add_argument("--wandb_project", type=str, default=None)
+    p.add_argument("--wandb_entity", type=str, default=None)
+    p.add_argument("--wandb_run_name", type=str, default=None)
 
     return p.parse_args()
 
@@ -158,6 +181,12 @@ def main():
         os.environ.setdefault("OMP_NUM_THREADS", "1")
         os.environ.setdefault("MKL_NUM_THREADS", "1")
         os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+    if args.run_dir:
+        run_dir = Path(args.run_dir).expanduser().resolve()
+    else:
+        run_dir = Path("runs") / args.dataset_name / f"fedext_{ts()}"
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     # 解析 GPU 列表
     gpu_list = [g.strip() for g in args.gpus.split(",") if g.strip() != ""]
@@ -177,11 +206,12 @@ def main():
     server_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128,expandable_segments:True")
 
     # Server
-    server_cmd = build_server_cmd(args)
+    server_cmd = build_server_cmd(args, str(run_dir))
     server_log = Path(args.log_dir) / f"server_{ts()}.log"
     print("[Launcher] Starting Server:")
     print(" ", " ".join(server_cmd))
     print(" ", f"logs -> {server_log}")
+    print(" ", f"artifacts -> {run_dir}")
     server_proc = launch(server_cmd, server_log, env=server_env)
 
     # Optional warmup for server to bind port

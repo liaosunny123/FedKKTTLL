@@ -3,11 +3,18 @@ import json
 import os
 import time
 
+import importlib
+import sys
+
 import torch
 from torch.utils.data import DataLoader
 
 from utils.data_distribution import DataDistributionManager
 from utils.data_utils import read_client_data
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 
 def parse_args():
@@ -76,9 +83,35 @@ def load_client_model(run_dir, client_id, device):
     if not os.path.exists(path):
         raise FileNotFoundError(f"未找到客户端 {client_id} 模型文件: {path}")
     try:
-        model = torch.load(path, map_location=device, weights_only=False)
+        payload = torch.load(path, map_location="cpu", weights_only=False)
     except TypeError:
-        model = torch.load(path, map_location=device)
+        payload = torch.load(path, map_location="cpu")
+
+    if isinstance(payload, dict) and "state_dict" in payload:
+        module_aliases = [
+            ("FedReal.common.model.models_fedext", "FedReal.common.model.models_fedext"),
+            ("common.model.models_fedext", "FedReal.common.model.models_fedext"),
+        ]
+        for alias, target in module_aliases:
+            if alias not in sys.modules:
+                try:
+                    sys.modules[alias] = importlib.import_module(target)
+                except ModuleNotFoundError:
+                    continue
+
+        from FedReal.common.model.models_fedext import FedEXTModel  # type: ignore
+
+        model_name = payload.get("model_name", "resnet18")
+        feature_dim = payload.get("feature_dim", 512)
+        num_classes = payload.get("num_classes", 10)
+        encoder_ratio = payload.get("encoder_ratio", 1.0)
+        state_dict = payload["state_dict"]
+
+        model = FedEXTModel(cid=client_id, model_name=model_name, feature_dim=feature_dim, num_classes=num_classes, encoder_ratio=encoder_ratio)
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        model = payload
+
     model.to(device)
     model.eval()
     return model

@@ -6,6 +6,7 @@ import os
 import time
 import threading
 from collections import defaultdict
+from typing import Optional
 
 import grpc
 import torch
@@ -22,9 +23,14 @@ from server.aggregator import Aggregator
 from common.data_utils.data_loader import server_data_loader
 
 class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
-    def __init__(self, cfg: FedConfig, public_test_loader, device: str = "cpu"):
+    def __init__(self, cfg: FedConfig, public_test_loader, device: str = "cpu", run_dir: Optional[str] = None):
         self.cfg = cfg
-        self.aggregator = Aggregator(cfg, public_test_loader=public_test_loader, device=device)
+        self.aggregator = Aggregator(
+            cfg,
+            public_test_loader=public_test_loader,
+            device=device,
+            run_dir=run_dir,
+        )
         self.logger = logging.getLogger("Server")
         self.start_time = None
         self.end_time = None
@@ -54,12 +60,14 @@ class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
 
     # ---- RPC: 客户端注册 ----
     def RegisterClient(self, request, context):
-        client_id, client_index = self.aggregator.register(request.client_name)
-        group_index = client_index % 5
-        self.logger.info(f"Registered {client_id} (index={client_index})")
+        client_id, client_index, group_index = self.aggregator.register(request.client_name)
+        self.logger.info(
+            f"Registered {client_id} (index={client_index}, group={group_index})"
+        )
         return fed_pb2.RegisterReply(
             client_id=client_id,
             client_index=client_index,
+            group_index=group_index,
             config=self._cfg_to_proto(),
         )
 
@@ -102,13 +110,21 @@ class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
                 self.bytes_up_local_total += n
                 self.bytes_up_local_by_client[request.client_id] += n
 
+        train_loss = request.train_loss if request.HasField("train_loss") else None
+        train_acc = request.train_acc if request.HasField("train_acc") else None
+        test_loss = request.test_loss if request.HasField("test_loss") else None
+        test_acc = request.test_acc if request.HasField("test_acc") else None
+
         ok = self.aggregator.submit_update(
             client_id=request.client_id,
             group_id=request.group_id,
             round_id=request.round,
             local_bytes=request.local_model,
             num_samples=request.num_samples,
-            test_acc=request.test_acc,
+            test_acc=test_acc,
+            train_acc=train_acc,
+            train_loss=train_loss,
+            test_loss=test_loss,
         )
         return fed_pb2.UploadReply(accepted=ok, round=self.aggregator.current_round)
 
@@ -123,6 +139,7 @@ def main():
     parser.add_argument("--num_clients", type=int, default=3)
     parser.add_argument("--feature_dim", type=int, default=512)
     parser.add_argument("--encoder_ratio", type=float, default=1.0)
+    parser.add_argument("--algorithm", type=str, default="FedEXT", choices=["FedEXT", "FedAvg"], help="Algorithm name for logging")
     parser.add_argument("--rounds", type=int, default=30)
     parser.add_argument("--local_epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=64)
@@ -134,6 +151,11 @@ def main():
     parser.add_argument("--max_message_mb", type=int, default=128)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num_workers", type=int, default=None, help="Dataloader workers (None = auto)")
+    parser.add_argument("--run_dir", type=str, default=None, help="Directory to store aggregated FedEXT artifacts")
+    parser.add_argument("--use_wandb", action="store_true")
+    parser.add_argument("--wandb_project", type=str, default=None)
+    parser.add_argument("--wandb_entity", type=str, default=None)
+    parser.add_argument("--wandb_run_name", type=str, default=None)
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -158,8 +180,19 @@ def main():
     num_classes = args.num_classes
 
     cfg.num_classes = num_classes
+    cfg.dataset_name = args.dataset_name
+    cfg.algorithm = args.algorithm
+    cfg.use_wandb = args.use_wandb
+    cfg.wandb_project = args.wandb_project
+    cfg.wandb_entity = args.wandb_entity
+    cfg.wandb_run_name = args.wandb_run_name
 
-    service = FederatedService(cfg, public_test_loader=server_test_loader, device=args.device)
+    service = FederatedService(
+        cfg,
+        public_test_loader=server_test_loader,
+        device=args.device,
+        run_dir=args.run_dir,
+    )
 
     max_len = cfg.max_message_mb * 1024 * 1024
     server = grpc.server(
@@ -183,6 +216,8 @@ def main():
     logger.info(f" - clients number : {args.num_clients}")
     logger.info(f" - local epochs : {args.local_epochs}")
     logger.info(f"Listening on {args.bind}; device={args.device}")
+    if args.run_dir:
+        logger.info(f"Artifacts will be stored in: {args.run_dir}")
 
     # 只打印一次“完成”
     printed_done = False
@@ -220,6 +255,7 @@ def main():
                     logger.info(f"Server total acc : {service.aggregator.server_eval_acc}")
                     logger.info(f"Server total loss : {service.aggregator.server_eval_loss}")
                     print("Press Ctrl-C to exit")
+                    break
     except KeyboardInterrupt:
         pass
     finally:

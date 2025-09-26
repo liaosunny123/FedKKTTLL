@@ -1,0 +1,1 @@
+{"Server/classifier_epoch":4,"_runtime":32,"Server/step":4,"_step":4,"Server/global_model_test_accuracy":0.41429629921913147,"Server/classifier_learning_rate":0.01,"Server/classifier_train_loss":1.4079508834297274,"_wandb":{"runtime":32},"Server/classifier_train_accuracy":0.4997530864197531,"_timestamp":1.7589103208903365e+09}

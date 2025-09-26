@@ -17,6 +17,10 @@ class clientFedAvg(Client):
         self.learning_rate_decay_gamma = getattr(args, 'learning_rate_decay_gamma', 0.99)
         self.current_round = 0
 
+        # Optimizer hyper-parameters (align with FedEXT defaults for fair comparison)
+        self.momentum = getattr(args, 'local_momentum', 0.9)
+        self.weight_decay = getattr(args, 'local_weight_decay', 1e-4)
+
     def train(self):
         trainloader = self.load_train_data()
         model = load_item(self.role, 'model', self.save_folder_name)
@@ -29,7 +33,12 @@ class clientFedAvg(Client):
         if self.learning_rate_decay:
             current_lr = self.learning_rate * (self.learning_rate_decay_gamma ** self.current_round)
 
-        optimizer = torch.optim.SGD(model.parameters(), lr=current_lr)
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=current_lr,
+            momentum=self.momentum,
+            weight_decay=self.weight_decay
+        )
         model.train()
 
         start_time = time.time()

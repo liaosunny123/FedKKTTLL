@@ -17,6 +17,10 @@ class clientFedEXT(Client):
         self.learning_rate_decay = getattr(args, 'learning_rate_decay', False)
         self.learning_rate_decay_gamma = getattr(args, 'learning_rate_decay_gamma', 0.99)
         self.current_round = 0
+
+        # Optimizer hyper-parameters shared with FedAvg for comparable behaviour
+        self.momentum = getattr(args, 'local_momentum', 0.9)
+        self.weight_decay = getattr(args, 'local_weight_decay', 1e-4)
         
         # FedEXT specific attributes
         self.group_id = None  # Will be set by server
@@ -104,12 +108,12 @@ class clientFedEXT(Client):
                 param_groups.append({'params': local_params, 'lr': local_lr})
             
             if param_groups:
-                optimizer = torch.optim.SGD(param_groups, momentum=0.9, weight_decay=1e-4)
+                optimizer = torch.optim.SGD(param_groups, momentum=self.momentum, weight_decay=self.weight_decay)
             else:
-                optimizer = torch.optim.SGD(model.parameters(), lr=current_lr, momentum=0.9, weight_decay=1e-4)
+                optimizer = torch.optim.SGD(model.parameters(), lr=current_lr, momentum=self.momentum, weight_decay=self.weight_decay)
         else:
             # Fallback to standard optimizer
-            optimizer = torch.optim.SGD(model.parameters(), lr=current_lr, momentum=0.9, weight_decay=1e-4)
+            optimizer = torch.optim.SGD(model.parameters(), lr=current_lr, momentum=self.momentum, weight_decay=self.weight_decay)
         
         model.train()
         

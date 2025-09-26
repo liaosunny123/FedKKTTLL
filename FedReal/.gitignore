@@ -1,0 +1,11 @@
+/dataset/*
+!/data/.gitkeep
+/data/*
+!/data/.gitkeep
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+/logs/*
+/logs_cifar100/*

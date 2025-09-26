@@ -30,13 +30,13 @@ SERVER_EPOCHS=20        # Server classifier训练轮次
 # 本地训练参数
 LOCAL_LR=0.005           # 本地学习率 (与FedAvg保持一致)
 LOCAL_BATCH_SIZE=10      # 本地批次大小 (与FedAvg保持一致)
-LOCAL_EPOCHS=5           # 本地训练轮次 (与FedAvg保持一致)
+LOCAL_EPOCHS=1           # 本地训练轮次 (与FedAvg保持一致)
 LR_DECAY=false           # 关闭学习率衰减 (保持简单)
 LR_DECAY_GAMMA=0.99      # 学习率衰减系数
 
 # 算法配置
 # 可选算法：FedAvg, FedEXT, FedKTL-stylegan-3, FedKTL-stylegan-xl, FedKTL-stable-diffusion
-ALGORITHM="FedEXT"  # 联邦学习算法
+ALGORITHM="FedAvg"  # 联邦学习算法
 
 # 生成器配置
 # FedKTL-stable-diffusion:

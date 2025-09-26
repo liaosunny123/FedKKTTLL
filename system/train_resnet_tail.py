@@ -99,26 +99,79 @@ def build_classifier(
             fallback_applied = True
         tail_requires_spatial = False
 
+    projection_reason = None
+    projection_target_shape = None
+
+    def infer_conv_in_channels(module: nn.Module):
+        if hasattr(module, "in_channels"):
+            return getattr(module, "in_channels")
+        if hasattr(module, "conv1") and hasattr(module.conv1, "in_channels"):
+            return module.conv1.in_channels
+        if isinstance(module, nn.Sequential):
+            for child in module.children():
+                result = infer_conv_in_channels(child)
+                if result is not None:
+                    return result
+        for child in module.children():
+            result = infer_conv_in_channels(child)
+            if result is not None:
+                return result
+        return None
+
     if tail_requires_spatial and dataset_is_flat:
         if force_linear_projection and original_feature_shape is not None:
             projection_added = True
+            projection_reason = "flat_dataset"
+            projection_target_shape = original_feature_shape
         else:
             if total_layers > 0:
                 fedext_model.set_layer_split(total_layers - 1)
                 fallback_applied = True
             tail_requires_spatial = False
+    elif tail_requires_spatial:
+        first_local_module = fedext_model.local_layers[0][1] if fedext_model.local_layers else None
+        expected_channels = infer_conv_in_channels(first_local_module) if first_local_module else None
+        feature_channels = None
+        if original_feature_shape and len(original_feature_shape) > 0:
+            feature_channels = original_feature_shape[0]
+        elif input_shape and len(input_shape) > 0:
+            feature_channels = input_shape[0]
+
+        if (
+            expected_channels is not None
+            and feature_channels is not None
+            and expected_channels != feature_channels
+        ):
+            projection_added = True
+            projection_reason = "channel_mismatch"
+            spatial_dims = ()
+            if original_feature_shape and len(original_feature_shape) > 1:
+                spatial_dims = original_feature_shape[1:]
+            elif input_shape and len(input_shape) > 1:
+                spatial_dims = input_shape[1:]
+            if not spatial_dims:
+                spatial_dims = (1, 1)
+            projection_target_shape = (expected_channels, *spatial_dims)
 
     final_split_index = getattr(fedext_model, "layer_split_index", None)
     final_local_layers = [name for name, _ in (fedext_model.local_layers or [])]
 
     local_modules = []
+    applied_projection_shape = None
     if projection_added:
-        target_dim = int(math.prod(original_feature_shape))
-        projection = nn.Sequential(
-            nn.Linear(input_feature_dim, target_dim),
-            nn.Unflatten(1, original_feature_shape),
-        )
+        target_shape = projection_target_shape or original_feature_shape
+        if target_shape is None:
+            raise ValueError("Cannot determine projection target shape for spatial tail")
+        target_dim = int(math.prod(target_shape))
+        projection_layers = []
+        if not dataset_is_flat:
+            projection_layers.append(nn.Flatten(start_dim=1))
+        projection_layers.append(nn.Linear(input_feature_dim, target_dim))
+        if len(target_shape) > 1:
+            projection_layers.append(nn.Unflatten(1, target_shape))
+        projection = nn.Sequential(*projection_layers)
         local_modules.append(projection)
+        applied_projection_shape = target_shape
 
     flatten_inserted = False
     for layer_name, layer in fedext_model.local_layers:
@@ -210,13 +263,15 @@ def build_classifier(
         "input_feature_dim": input_feature_dim,
         "requires_flatten_input": False,
         "requires_reshape_input": False,
-        "projection_shape": tuple(original_feature_shape) if projection_added else None,
+        "projection_shape": tuple(applied_projection_shape) if applied_projection_shape else None,
     }
 
     if head_dim_adjusted_from is not None:
         info["head_in_features_adjusted_from"] = head_dim_adjusted_from
         info["head_in_features_adjusted_to"] = current_head_dim
     info["flatten_inserted_after_avgpool"] = flatten_inserted
+    if projection_reason is not None:
+        info["projection_reason"] = projection_reason
 
     if tail_type in ("head", "conv_with_projection") and not dataset_is_flat:
         info["requires_flatten_input"] = True
@@ -338,7 +393,14 @@ def main():
     elif tail_type == "conv_with_projection":
         proj_shape = classifier_info.get("projection_shape")
         proj_shape_str = f" -> {proj_shape}" if proj_shape else ""
-        print(f"使用线性映射适配尾部卷积层{proj_shape_str}。")
+        reason = classifier_info.get("projection_reason")
+        if reason == "channel_mismatch":
+            reason_note = "（因通道不匹配自动插入）"
+        elif reason == "flat_dataset":
+            reason_note = "（输入已展平，自动恢复空间形状）"
+        else:
+            reason_note = ""
+        print(f"使用线性映射适配尾部卷积层{proj_shape_str}{reason_note}。")
     elif tail_type == "conv_native":
         print("使用卷积尾部直接训练。")
     else:

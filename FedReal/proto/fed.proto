@@ -28,13 +28,6 @@ message GetTaskRequest {
   string client_id = 1;
 }
 
-message TaskReply {
-  int32 round = 1;            // 当前轮次
-  bool participate = 2;       // 本轮是否被采样
-  bytes global_model = 3;     // 当前全局模型（state_dict 序列化）
-  TrainingConfig config = 4;  // 冗余携带，确保对齐
-}
-
 message UploadRequest {
   string client_id = 1;
   int32 group_id = 2;
@@ -53,9 +46,45 @@ message UploadReply {
   int32 round = 2; // 服务端当前轮
 }
 
+// —— 新增阶段：特征上传 ——
+enum TaskStage {
+  STAGE_TRAINING = 0;
+  STAGE_FEATURE_UPLOAD = 1;
+  STAGE_FINALIZE = 2;
+}
+
+message FeatureTaskConfig {
+  int32 batch_size = 1;
+  bool keep_spatial = 2;
+  bool include_test_split = 3;
+}
+
+message TaskReply {
+  int32 round = 1;            // 当前轮次
+  bool participate = 2;       // 本轮是否被采样
+  bytes global_model = 3;     // 当前全局模型（state_dict 序列化）
+  TrainingConfig config = 4;  // 冗余携带，确保对齐
+  TaskStage stage = 5;        // 当前任务阶段（训练 / 特征上传 / 完成）
+  FeatureTaskConfig feature = 6; // 当需要生成特征时的附加配置
+}
+
+message FeatureUploadRequest {
+  string client_id = 1;
+  int32 client_index = 2;
+  bytes payload = 3; // torch.save 序列化后的特征与标签
+  string payload_type = 4; // 预留：默认为 "torch"
+  int32 chunk_id = 5;      // 当前分片序号（0-based）。缺省或 0 视为单分片
+  int32 total_chunks = 6;  // 总分片数。缺省或 0 表示单分片
+}
+
+message FeatureUploadReply {
+  bool accepted = 1;
+}
+
 
 service FederatedService {
   rpc RegisterClient(RegisterRequest) returns (RegisterReply);
   rpc GetTask(GetTaskRequest) returns (TaskReply);
   rpc UploadUpdate(UploadRequest) returns (UploadReply);
+  rpc UploadFeatures(FeatureUploadRequest) returns (FeatureUploadReply);
 }

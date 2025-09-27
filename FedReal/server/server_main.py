@@ -34,9 +34,15 @@ class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
         self.logger = logging.getLogger("Server")
         self.start_time = None
         self.end_time = None
-        
+
 
         self._byte_lock = threading.Lock()
+
+        self._stage_to_proto = {
+            "training": fed_pb2.STAGE_TRAINING,
+            "feature_upload": fed_pb2.STAGE_FEATURE_UPLOAD,
+            "finalize": fed_pb2.STAGE_FINALIZE,
+        }
 
         # 计算传输成本
         # 总量
@@ -45,6 +51,8 @@ class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
         # 分客户端
         self.bytes_down_global_by_client = defaultdict(int)
         self.bytes_up_local_by_client = defaultdict(int)
+        self.bytes_up_features_total = 0
+        self.bytes_up_features_by_client = defaultdict(int)
 
     def _cfg_to_proto(self) -> fed_pb2.TrainingConfig:
         return fed_pb2.TrainingConfig(
@@ -73,32 +81,49 @@ class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
 
     # ---- RPC: 下发训练任务（全局模型+配置）----
     def GetTask(self, request, context):
-        round_id, participate, global_bytes = self.aggregator.get_task(request.client_id)
+        round_id, participate, global_bytes, stage, feature_cfg = self.aggregator.get_task(request.client_id)
 
-        # 首轮真正开始计时
-        if self.start_time is None and round_id < self.cfg.total_rounds and self.aggregator.expected_updates > 0:
+        # 首轮真正开始计时（仅训练阶段）
+        if (
+            self.start_time is None
+            and stage == "training"
+            and round_id < self.cfg.total_rounds
+            and self.aggregator.expected_updates > 0
+        ):
             self.start_time = time.time()
             self.logger.info("Training timer started.")
 
-        # ✅ 只有在确实要下发（global_bytes 非空）时才打印/统计
         if global_bytes and len(global_bytes) > 0:
             n = len(global_bytes)
-            self.logger.info(f"[Send] global_model bytes={n} ({n/1024/1024:.2f} MB) "
-                            f"to {request.client_id} for round={round_id}")
+            self.logger.info(
+                "[Send] global_model bytes=%s (%0.2f MB) to %s for round=%s stage=%s",
+                n,
+                n / 1024 / 1024,
+                request.client_id,
+                round_id,
+                stage,
+            )
             with self._byte_lock:
                 self.bytes_down_global_total += n
                 self.bytes_down_global_by_client[request.client_id] += n
 
-        # 结束保护：不参与
-        if round_id >= self.cfg.total_rounds:
+        if stage == "finalize":
             participate = False
 
-        return fed_pb2.TaskReply(
+        reply = fed_pb2.TaskReply(
             round=round_id,
             participate=participate,
-            global_model=global_bytes,  # 可能是空字节，在aggregator里写死了判断逻辑
+            global_model=global_bytes,
             config=self._cfg_to_proto(),
+            stage=self._stage_to_proto.get(stage, fed_pb2.STAGE_TRAINING),
         )
+
+        if feature_cfg:
+            reply.feature.batch_size = int(feature_cfg.get("batch_size", 0))
+            reply.feature.keep_spatial = bool(feature_cfg.get("keep_spatial", False))
+            reply.feature.include_test_split = bool(feature_cfg.get("include_test_split", True))
+
+        return reply
 
     # ---- RPC: 接收本地更新（模型权重/样本数/指标）----
     def UploadUpdate(self, request, context):
@@ -128,6 +153,31 @@ class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
         )
         return fed_pb2.UploadReply(accepted=ok, round=self.aggregator.current_round)
 
+    # ---- RPC: 上传客户端特征数据集 ----
+    def UploadFeatures(self, request, context):
+        payload_size = len(request.payload)
+        self.logger.info(
+            "[Recv] features bytes=%s (%0.2f MB) from %s",
+            payload_size,
+            payload_size / 1024 / 1024,
+            request.client_id,
+        )
+
+        accepted = self.aggregator.submit_features(
+            client_id=request.client_id,
+            client_index=request.client_index,
+            payload_bytes=request.payload,
+            chunk_id=getattr(request, "chunk_id", 0),
+            total_chunks=getattr(request, "total_chunks", 0),
+        )
+
+        if accepted:
+            with self._byte_lock:
+                self.bytes_up_features_total += payload_size
+                self.bytes_up_features_by_client[request.client_id] += payload_size
+
+        return fed_pb2.FeatureUploadReply(accepted=accepted)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -156,6 +206,15 @@ def main():
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--feature_batch_size", type=int, default=128, help="Batch size used when clients generate feature datasets")
+    parser.add_argument("--feature_keep_spatial", action="store_true", help="Ask clients to keep spatial feature maps instead of flattening")
+    parser.add_argument("--feature_no_test_split", action="store_true", help="Disable uploading client test split features")
+    parser.add_argument("--tail_batch_size", type=int, default=64, help="Batch size for server-side tail training")
+    parser.add_argument("--tail_epochs", type=int, default=20, help="Epochs for server-side tail training")
+    parser.add_argument("--tail_lr", type=float, default=0.01, help="Learning rate for tail classifier")
+    parser.add_argument("--tail_momentum", type=float, default=0.9, help="Momentum for tail classifier optimizer")
+    parser.add_argument("--tail_weight_decay", type=float, default=1e-4, help="Weight decay for tail classifier optimizer")
+    parser.add_argument("--tail_device", type=str, default=None, help="Device for tail classifier training (default: follow --device)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -175,17 +234,27 @@ def main():
         encoder_ratio=args.encoder_ratio
     )
 
-    server_test_loader = server_data_loader(args.data_root, args.dataset_name, args.batch_size, )
+    server_test_loader = server_data_loader(args.data_root, args.dataset_name, args.batch_size)
         
     num_classes = args.num_classes
 
     cfg.num_classes = num_classes
+    cfg.max_message_mb = args.max_message_mb
     cfg.dataset_name = args.dataset_name
     cfg.algorithm = args.algorithm
     cfg.use_wandb = args.use_wandb
     cfg.wandb_project = args.wandb_project
     cfg.wandb_entity = args.wandb_entity
     cfg.wandb_run_name = args.wandb_run_name
+    cfg.feature_batch_size = args.feature_batch_size
+    cfg.feature_keep_spatial = args.feature_keep_spatial
+    cfg.feature_include_test_split = not args.feature_no_test_split
+    cfg.tail_batch_size = args.tail_batch_size
+    cfg.tail_epochs = args.tail_epochs
+    cfg.tail_lr = args.tail_lr
+    cfg.tail_momentum = args.tail_momentum
+    cfg.tail_weight_decay = args.tail_weight_decay
+    cfg.tail_device = args.tail_device
 
     service = FederatedService(
         cfg,
@@ -219,47 +288,89 @@ def main():
     if args.run_dir:
         logger.info(f"Artifacts will be stored in: {args.run_dir}")
 
-    # 只打印一次“完成”
+    # 阶段状态指示
     printed_done = False
+    training_logged = False
+    feature_wait_logged = False
+    tail_training_logged = False
+    should_exit = False
     try:
         while True:
             time.sleep(1)
-            if (service.aggregator.current_round >= cfg.total_rounds
-                and service.aggregator.expected_updates == 0
-                and not service.aggregator.selected_this_round):
-                if not printed_done:
+            phase = getattr(service.aggregator, "phase", "training")
+
+            if phase == "training":
+                if (
+                    not training_logged
+                    and service.aggregator.current_round >= cfg.total_rounds
+                    and service.aggregator.expected_updates == 0
+                    and not service.aggregator.selected_this_round
+                ):
                     if service.start_time is not None:
                         service.end_time = time.time()
                         elapsed = service.end_time - service.start_time
-                        logger.info(f"Training completed. Total time: {elapsed:.2f}s ({elapsed/60:.2f} min).")
+                        logger.info(
+                            f"Federated rounds complete. Training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
+                        )
                     else:
-                        logger.info("Training completed.")
-                    
+                        logger.info("Federated rounds complete. Awaiting feature uploads...")
+                    training_logged = True
+                continue
+
+            if phase == "feature_collection":
+                if not feature_wait_logged:
+                    logger.info("Awaiting client feature uploads for tail training...")
+                    feature_wait_logged = True
+                continue
+
+            if phase == "server_training":
+                if not tail_training_logged:
+                    logger.info("All features received. Training server-side tail classifier...")
+                    tail_training_logged = True
+                continue
+
+            if phase == "finalize":
+                if not printed_done:
                     with service._byte_lock:
                         down = service.bytes_down_global_total
                         up_local = service.bytes_up_local_total
-                        
+                        up_features = service.bytes_up_features_total
+
                     logger.info(
                         "[Traffic Summary] "
                         f"down_global={fmt_bytes(down)}, "
                         f"up_local={fmt_bytes(up_local)}, "
-                        f"total={fmt_bytes(down + up_local)}"
+                        f"up_features={fmt_bytes(up_features)}, "
+                        f"total={fmt_bytes(down + up_local + up_features)}"
                     )
-                    # 如需查看分客户端明细：
                     for cid, v in service.bytes_down_global_by_client.items():
                         logger.info(f"[Traffic Detail] {cid} down_global={fmt_bytes(v)}")
                     for cid, v in service.bytes_up_local_by_client.items():
                         logger.info(f"[Traffic Detail] {cid} up_local={fmt_bytes(v)}")
-                    printed_done = True
+                    for cid, v in service.bytes_up_features_by_client.items():
+                        logger.info(f"[Traffic Detail] {cid} up_features={fmt_bytes(v)}")
+
                     logger.info(f"Client average acc: {service.aggregator.client_average_test_acc}")
                     logger.info(f"Server total acc : {service.aggregator.server_eval_acc}")
                     logger.info(f"Server total loss : {service.aggregator.server_eval_loss}")
-                    print("Press Ctrl-C to exit")
-                    break
+
+                    if service.aggregator.tail_metrics:
+                        logger.info(f"Tail metrics     : {service.aggregator.tail_metrics}")
+
+                    printed_done = True
+                    should_exit = True
+                break
     except KeyboardInterrupt:
         pass
     finally:
-        server.stop(0)
+        # 留出缓冲让仍在进行的 RPC 正常结束，避免线程池在关闭后收到请求
+        try:
+            server.stop(5).wait()
+        except Exception:
+            logger.exception("Failed to stop gRPC server gracefully")
+
+    if should_exit:
+        return
 
 
 if __name__ == "__main__":

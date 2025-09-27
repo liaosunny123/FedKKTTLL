@@ -49,6 +49,11 @@ class FederatedServiceStub(object):
                 request_serializer=fed__pb2.UploadRequest.SerializeToString,
                 response_deserializer=fed__pb2.UploadReply.FromString,
                 _registered_method=True)
+        self.UploadFeatures = channel.unary_unary(
+                '/fed.FederatedService/UploadFeatures',
+                request_serializer=fed__pb2.FeatureUploadRequest.SerializeToString,
+                response_deserializer=fed__pb2.FeatureUploadReply.FromString,
+                _registered_method=True)
 
 
 class FederatedServiceServicer(object):
@@ -72,6 +77,12 @@ class FederatedServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def UploadFeatures(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_FederatedServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -89,6 +100,11 @@ def add_FederatedServiceServicer_to_server(servicer, server):
                     servicer.UploadUpdate,
                     request_deserializer=fed__pb2.UploadRequest.FromString,
                     response_serializer=fed__pb2.UploadReply.SerializeToString,
+            ),
+            'UploadFeatures': grpc.unary_unary_rpc_method_handler(
+                    servicer.UploadFeatures,
+                    request_deserializer=fed__pb2.FeatureUploadRequest.FromString,
+                    response_serializer=fed__pb2.FeatureUploadReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -172,6 +188,33 @@ class FederatedService(object):
             '/fed.FederatedService/UploadUpdate',
             fed__pb2.UploadRequest.SerializeToString,
             fed__pb2.UploadReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UploadFeatures(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/fed.FederatedService/UploadFeatures',
+            fed__pb2.FeatureUploadRequest.SerializeToString,
+            fed__pb2.FeatureUploadReply.FromString,
             options,
             channel_credentials,
             insecure,

@@ -24,13 +24,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tfed.proto\x12\x03\x66\x65\x64\"\xb0\x01\n\x0eTrainingConfig\x12\x13\n\x0bnum_clients\x18\x01 \x01(\x05\x12\x14\n\x0ctotal_rounds\x18\x02 \x01(\x05\x12\x14\n\x0clocal_epochs\x18\x03 \x01(\x05\x12\x12\n\nbatch_size\x18\x04 \x01(\x05\x12\n\n\x02lr\x18\x05 \x01(\x02\x12\x10\n\x08momentum\x18\x06 \x01(\x02\x12\x17\n\x0fsample_fraction\x18\x07 \x01(\x02\x12\x12\n\nmodel_name\x18\x08 \x01(\t\"&\n\x0fRegisterRequest\x12\x13\n\x0b\x63lient_name\x18\x01 \x01(\t\"r\n\rRegisterReply\x12\x11\n\tclient_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63lient_index\x18\x02 \x01(\x05\x12\x13\n\x0bgroup_index\x18\x03 \x01(\x05\x12#\n\x06\x63onfig\x18\x04 \x01(\x0b\x32\x13.fed.TrainingConfig\"#\n\x0eGetTaskRequest\x12\x11\n\tclient_id\x18\x01 \x01(\t\"j\n\tTaskReply\x12\r\n\x05round\x18\x01 \x01(\x05\x12\x13\n\x0bparticipate\x18\x02 \x01(\x08\x12\x14\n\x0cglobal_model\x18\x03 \x01(\x0c\x12#\n\x06\x63onfig\x18\x04 \x01(\x0b\x32\x13.fed.TrainingConfig\"\x85\x02\n\rUploadRequest\x12\x11\n\tclient_id\x18\x01 \x01(\t\x12\x10\n\x08group_id\x18\x02 \x01(\x05\x12\r\n\x05round\x18\x03 \x01(\x05\x12\x13\n\x0blocal_model\x18\x04 \x01(\x0c\x12\x13\n\x0bnum_samples\x18\x05 \x01(\x03\x12\x17\n\ntrain_loss\x18\x06 \x01(\x01H\x00\x88\x01\x01\x12\x16\n\ttrain_acc\x18\x07 \x01(\x01H\x01\x88\x01\x01\x12\x16\n\ttest_loss\x18\x08 \x01(\x01H\x02\x88\x01\x01\x12\x15\n\x08test_acc\x18\t \x01(\x01H\x03\x88\x01\x01\x42\r\n\x0b_train_lossB\x0c\n\n_train_accB\x0c\n\n_test_lossB\x0b\n\t_test_acc\".\n\x0bUploadReply\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\r\n\x05round\x18\x02 \x01(\x05\x32\xb4\x01\n\x10\x46\x65\x64\x65ratedService\x12:\n\x0eRegisterClient\x12\x14.fed.RegisterRequest\x1a\x12.fed.RegisterReply\x12.\n\x07GetTask\x12\x13.fed.GetTaskRequest\x1a\x0e.fed.TaskReply\x12\x34\n\x0cUploadUpdate\x12\x12.fed.UploadRequest\x1a\x10.fed.UploadReplyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tfed.proto\x12\x03\x66\x65\x64\"\xb0\x01\n\x0eTrainingConfig\x12\x13\n\x0bnum_clients\x18\x01 \x01(\x05\x12\x14\n\x0ctotal_rounds\x18\x02 \x01(\x05\x12\x14\n\x0clocal_epochs\x18\x03 \x01(\x05\x12\x12\n\nbatch_size\x18\x04 \x01(\x05\x12\n\n\x02lr\x18\x05 \x01(\x02\x12\x10\n\x08momentum\x18\x06 \x01(\x02\x12\x17\n\x0fsample_fraction\x18\x07 \x01(\x02\x12\x12\n\nmodel_name\x18\x08 \x01(\t\"&\n\x0fRegisterRequest\x12\x13\n\x0b\x63lient_name\x18\x01 \x01(\t\"r\n\rRegisterReply\x12\x11\n\tclient_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63lient_index\x18\x02 \x01(\x05\x12\x13\n\x0bgroup_index\x18\x03 \x01(\x05\x12#\n\x06\x63onfig\x18\x04 \x01(\x0b\x32\x13.fed.TrainingConfig\"#\n\x0eGetTaskRequest\x12\x11\n\tclient_id\x18\x01 \x01(\t\"\x85\x02\n\rUploadRequest\x12\x11\n\tclient_id\x18\x01 \x01(\t\x12\x10\n\x08group_id\x18\x02 \x01(\x05\x12\r\n\x05round\x18\x03 \x01(\x05\x12\x13\n\x0blocal_model\x18\x04 \x01(\x0c\x12\x13\n\x0bnum_samples\x18\x05 \x01(\x03\x12\x17\n\ntrain_loss\x18\x06 \x01(\x01H\x00\x88\x01\x01\x12\x16\n\ttrain_acc\x18\x07 \x01(\x01H\x01\x88\x01\x01\x12\x16\n\ttest_loss\x18\x08 \x01(\x01H\x02\x88\x01\x01\x12\x15\n\x08test_acc\x18\t \x01(\x01H\x03\x88\x01\x01\x42\r\n\x0b_train_lossB\x0c\n\n_train_accB\x0c\n\n_test_lossB\x0b\n\t_test_acc\".\n\x0bUploadReply\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12\r\n\x05round\x18\x02 \x01(\x05\"Y\n\x11\x46\x65\x61tureTaskConfig\x12\x12\n\nbatch_size\x18\x01 \x01(\x05\x12\x14\n\x0ckeep_spatial\x18\x02 \x01(\x08\x12\x1a\n\x12include_test_split\x18\x03 \x01(\x08\"\xb2\x01\n\tTaskReply\x12\r\n\x05round\x18\x01 \x01(\x05\x12\x13\n\x0bparticipate\x18\x02 \x01(\x08\x12\x14\n\x0cglobal_model\x18\x03 \x01(\x0c\x12#\n\x06\x63onfig\x18\x04 \x01(\x0b\x32\x13.fed.TrainingConfig\x12\x1d\n\x05stage\x18\x05 \x01(\x0e\x32\x0e.fed.TaskStage\x12\'\n\x07\x66\x65\x61ture\x18\x06 \x01(\x0b\x32\x16.fed.FeatureTaskConfig\"\x8e\x01\n\x14\x46\x65\x61tureUploadRequest\x12\x11\n\tclient_id\x18\x01 \x01(\t\x12\x14\n\x0c\x63lient_index\x18\x02 \x01(\x05\x12\x0f\n\x07payload\x18\x03 \x01(\x0c\x12\x14\n\x0cpayload_type\x18\x04 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x05 \x01(\x05\x12\x14\n\x0ctotal_chunks\x18\x06 \x01(\x05\"&\n\x12\x46\x65\x61tureUploadReply\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08*M\n\tTaskStage\x12\x12\n\x0eSTAGE_TRAINING\x10\x00\x12\x18\n\x14STAGE_FEATURE_UPLOAD\x10\x01\x12\x12\n\x0eSTAGE_FINALIZE\x10\x02\x32\xfa\x01\n\x10\x46\x65\x64\x65ratedService\x12:\n\x0eRegisterClient\x12\x14.fed.RegisterRequest\x1a\x12.fed.RegisterReply\x12.\n\x07GetTask\x12\x13.fed.GetTaskRequest\x1a\x0e.fed.TaskReply\x12\x34\n\x0cUploadUpdate\x12\x12.fed.UploadRequest\x1a\x10.fed.UploadReply\x12\x44\n\x0eUploadFeatures\x12\x19.fed.FeatureUploadRequest\x1a\x17.fed.FeatureUploadReplyb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'fed_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
+  _globals['_TASKSTAGE']._serialized_start=1159
+  _globals['_TASKSTAGE']._serialized_end=1236
   _globals['_TRAININGCONFIG']._serialized_start=19
   _globals['_TRAININGCONFIG']._serialized_end=195
   _globals['_REGISTERREQUEST']._serialized_start=197
@@ -39,12 +41,18 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_REGISTERREPLY']._serialized_end=351
   _globals['_GETTASKREQUEST']._serialized_start=353
   _globals['_GETTASKREQUEST']._serialized_end=388
-  _globals['_TASKREPLY']._serialized_start=390
-  _globals['_TASKREPLY']._serialized_end=496
-  _globals['_UPLOADREQUEST']._serialized_start=499
-  _globals['_UPLOADREQUEST']._serialized_end=760
-  _globals['_UPLOADREPLY']._serialized_start=762
-  _globals['_UPLOADREPLY']._serialized_end=808
-  _globals['_FEDERATEDSERVICE']._serialized_start=811
-  _globals['_FEDERATEDSERVICE']._serialized_end=991
+  _globals['_UPLOADREQUEST']._serialized_start=391
+  _globals['_UPLOADREQUEST']._serialized_end=652
+  _globals['_UPLOADREPLY']._serialized_start=654
+  _globals['_UPLOADREPLY']._serialized_end=700
+  _globals['_FEATURETASKCONFIG']._serialized_start=702
+  _globals['_FEATURETASKCONFIG']._serialized_end=791
+  _globals['_TASKREPLY']._serialized_start=794
+  _globals['_TASKREPLY']._serialized_end=972
+  _globals['_FEATUREUPLOADREQUEST']._serialized_start=975
+  _globals['_FEATUREUPLOADREQUEST']._serialized_end=1117
+  _globals['_FEATUREUPLOADREPLY']._serialized_start=1119
+  _globals['_FEATUREUPLOADREPLY']._serialized_end=1157
+  _globals['_FEDERATEDSERVICE']._serialized_start=1239
+  _globals['_FEDERATEDSERVICE']._serialized_end=1489
 # @@protoc_insertion_point(module_scope)

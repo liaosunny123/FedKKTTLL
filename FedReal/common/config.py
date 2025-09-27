@@ -21,6 +21,15 @@ class FedConfig:
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
     wandb_run_name: Optional[str] = None
+    feature_batch_size: int = 128
+    feature_keep_spatial: bool = False
+    feature_include_test_split: bool = True
+    tail_batch_size: int = 64
+    tail_epochs: int = 20
+    tail_lr: float = 0.01
+    tail_momentum: float = 0.9
+    tail_weight_decay: float = 1e-4
+    tail_device: Optional[str] = None
 
     def to_dict(self):
         return self.__dict__.copy()

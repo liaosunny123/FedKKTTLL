@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import math
@@ -6,7 +7,7 @@ import time
 from collections import defaultdict, OrderedDict
 from pathlib import Path
 from statistics import mean
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 
 import torch
 
@@ -15,6 +16,7 @@ from common.serialization import bytes_to_state_dict, state_dict_to_bytes
 from common.utils import select_clients
 
 from .eval import evaluate
+from .tail_trainer import TailTrainConfig, train_tail_classifier
 
 
 logger = logging.getLogger("Server").getChild("Aggregator")
@@ -42,7 +44,32 @@ class Aggregator:
         self.received_updates: Dict[str, Dict[str, object]] = {}
         self.completed_this_round: Set[str] = set()
         self.require_full = True
-        self.lock = threading.Lock()
+        # 使用可重入锁，避免同一线程在阶段转换时二次获取锁导致死锁
+        self.lock = threading.RLock()
+
+        # —— Extended pipeline state ——
+        self.phase: str = "training"
+        self.feature_payloads: Dict[str, Dict[str, Any]] = {}
+        self.feature_requests_pending: Set[str] = set()
+        self._feature_chunk_states: Dict[str, Dict[str, Any]] = {}
+        self.tail_metrics: Optional[Dict[str, Any]] = None
+        self._tail_training_started = False
+
+        self.feature_config = {
+            "batch_size": int(getattr(self.cfg, "feature_batch_size", getattr(self.cfg, "batch_size", 64))),
+            "keep_spatial": bool(getattr(self.cfg, "feature_keep_spatial", False)),
+            "include_test_split": bool(getattr(self.cfg, "feature_include_test_split", True)),
+        }
+        tail_device = getattr(self.cfg, "tail_device", None) or device
+        self.tail_config_kwargs = {
+            "batch_size": int(getattr(self.cfg, "tail_batch_size", getattr(self.cfg, "batch_size", 64))),
+            "epochs": int(getattr(self.cfg, "tail_epochs", 20)),
+            "lr": float(getattr(self.cfg, "tail_lr", 0.01)),
+            "momentum": float(getattr(self.cfg, "tail_momentum", 0.9)),
+            "weight_decay": float(getattr(self.cfg, "tail_weight_decay", 1e-4)),
+            "device": tail_device,
+        }
+        self._feature_collection_announced = False
 
         # —— Metrics ——
         self.client_average_test_acc: List[float] = []
@@ -50,6 +77,7 @@ class Aggregator:
         self.server_eval_acc: List[float] = []
         self.server_eval_loss: List[float] = []
         self.round_client_metrics: Dict[int, List[Dict[str, Optional[float]]]] = defaultdict(list)
+        self._finalized_clients: Set[str] = set()
 
         # —— Model buffers ——
         self._template_model = self._new_model_instance()
@@ -71,11 +99,16 @@ class Aggregator:
             self.run_dir.mkdir(parents=True, exist_ok=True)
             (self.run_dir / "groups").mkdir(exist_ok=True)
             (self.run_dir / "global").mkdir(exist_ok=True)
+            self.feature_dir = self.run_dir / "feature_dataset"
+            self.feature_dir.mkdir(exist_ok=True)
+        else:
+            self.feature_dir = None
 
         # —— WandB ——
         self.use_wandb = bool(getattr(self.cfg, "use_wandb", False))
         self._wandb = None
         self.wandb_run = None
+        self._wandb_finalized = False
         if self.use_wandb:
             try:
                 import wandb  # type: ignore
@@ -111,6 +144,8 @@ class Aggregator:
             )
             wandb.define_metric("Global/step")
             wandb.define_metric("Client/*", step_metric="Global/step")
+            wandb.define_metric("Tail/epoch")
+            wandb.define_metric("Tail/*", step_metric="Tail/epoch")
 
     # ------------------------------------------------------------------
     # Helper construction utilities
@@ -175,6 +210,8 @@ class Aggregator:
             return client_id, client_idx, group_id
 
     def _ensure_sampling(self):
+        if self.phase != "training":
+            return
         with self.lock:
             if self.current_round >= self.cfg.total_rounds:
                 self.selected_this_round = []
@@ -232,17 +269,52 @@ class Aggregator:
         with self.lock:
             group_id = self.client_groups.get(client_id, 0)
 
-            if self.current_round >= self.cfg.total_rounds:
+            if self.phase == "training":
+                if self.current_round >= self.cfg.total_rounds:
+                    transitioned = self._transition_to_feature_collection_locked()
+                    if transitioned:
+                        # fall through to feature upload branches below
+                        pass
+                    else:
+                        model_bytes = self._model_bytes_for_group(group_id)
+                        return self.current_round, False, model_bytes, "finalize", None
+                else:
+                    participate = client_id in self.selected_this_round and self.expected_updates > 0
+
+                    if client_id in self.completed_this_round:
+                        participate = False
+
+                    model_bytes = self._model_bytes_for_group(group_id) if participate else b""
+                    return self.current_round, participate, model_bytes, "training", None
+
+            if self.phase == "feature_collection":
+                participate = client_id not in self.feature_payloads
+                model_bytes = self._model_bytes_for_group(group_id) if participate else b""
+                return (
+                    self.cfg.total_rounds,
+                    participate,
+                    model_bytes,
+                    "feature_upload",
+                    dict(self.feature_config),
+                )
+
+            if self.phase == "server_training":
+                model_bytes = b""
+                return (
+                    self.cfg.total_rounds,
+                    False,
+                    model_bytes,
+                    "feature_upload",
+                    dict(self.feature_config),
+                )
+
+            # Finalize phase: broadcast final group model once more for record keeping.
+            if client_id not in self._finalized_clients:
                 model_bytes = self._model_bytes_for_group(group_id)
-                return self.current_round, False, model_bytes
-
-            participate = client_id in self.selected_this_round and self.expected_updates > 0
-
-            if client_id in self.completed_this_round:
-                participate = False
-
-            model_bytes = self._model_bytes_for_group(group_id) if participate else b""
-            return self.current_round, participate, model_bytes
+                self._finalized_clients.add(client_id)
+            else:
+                model_bytes = b""
+            return self.cfg.total_rounds, False, model_bytes, "finalize", None
 
     def submit_update(
         self,
@@ -437,6 +509,286 @@ class Aggregator:
         self.received_updates.clear()
         self.completed_this_round.clear()
 
+        if self.current_round >= self.cfg.total_rounds:
+            self._on_training_complete()
+
+    # ------------------------------------------------------------------
+    # Post-training feature orchestration
+    # ------------------------------------------------------------------
+    def _on_training_complete(self):
+        with self.lock:
+            self._transition_to_feature_collection_locked()
+
+    def _transition_to_feature_collection_locked(self) -> bool:
+        if self.phase != "training":
+            return False
+        self.phase = "feature_collection"
+        self.feature_requests_pending = set(self.registered)
+        if not self._feature_collection_announced:
+            logger.info(
+                "Federated rounds complete. Waiting for %s clients to upload feature datasets.",
+                len(self.feature_requests_pending),
+            )
+            self._feature_collection_announced = True
+        return True
+
+    def submit_features(self, client_id: str, client_index: int, payload_bytes: bytes, chunk_id: int, total_chunks: int) -> bool:
+        start_tail_thread = False
+        with self.lock:
+            if self.phase not in {"feature_collection", "server_training"}:
+                logger.warning(
+                    "Received feature payload from %s while in phase %s", client_id, self.phase
+                )
+                return False
+
+            if client_id in self.feature_payloads:
+                logger.info("Duplicate feature payload from %s ignored", client_id)
+                return True
+
+            chunk_id = max(0, int(chunk_id))
+            total_chunks = max(0, int(total_chunks))
+            if total_chunks <= 0:
+                total_chunks = 1
+            if chunk_id >= total_chunks:
+                logger.error(
+                    "Invalid chunk metadata from %s: chunk_id=%s total_chunks=%s",
+                    client_id,
+                    chunk_id,
+                    total_chunks,
+                )
+                return False
+
+            if total_chunks > 1:
+                state = self._feature_chunk_states.get(client_id)
+                if state is None:
+                    state = {
+                        "total": total_chunks,
+                        "chunks": {},
+                    }
+                    self._feature_chunk_states[client_id] = state
+                elif state["total"] != total_chunks:
+                    logger.error(
+                        "Chunk metadata mismatch for %s: existing total=%s, new=%s",
+                        client_id,
+                        state["total"],
+                        total_chunks,
+                    )
+                    del self._feature_chunk_states[client_id]
+                    return False
+
+                if chunk_id in state["chunks"]:
+                    logger.debug(
+                        "Duplicate chunk %s/%s from %s ignored",
+                        chunk_id,
+                        total_chunks,
+                        client_id,
+                    )
+                    return True
+
+                state["chunks"][chunk_id] = payload_bytes
+                if len(state["chunks"]) < total_chunks:
+                    logger.debug(
+                        "Buffered chunk %s/%s from %s (bytes=%s)",
+                        chunk_id,
+                        total_chunks,
+                        client_id,
+                        len(payload_bytes),
+                    )
+                    return True
+
+                # Assemble full payload
+                ordered_chunks = [state["chunks"][idx] for idx in range(total_chunks)]
+                payload_bytes = b"".join(ordered_chunks)
+                del self._feature_chunk_states[client_id]
+
+            try:
+                data = torch.load(io.BytesIO(payload_bytes), map_location="cpu", weights_only=False)
+            except Exception:
+                logger.exception("Failed to decode feature payload from %s", client_id)
+                return False
+
+            if not isinstance(data, dict):
+                logger.error("Invalid feature payload type %s from %s", type(data), client_id)
+                return False
+
+            prepared = self._sanitize_feature_payload(data)
+            prepared["client_id"] = client_id
+            prepared["client_index"] = int(client_index)
+            self.feature_payloads[client_id] = prepared
+            self.feature_requests_pending.discard(client_id)
+
+            if self.feature_dir is not None:
+                save_path = self.feature_dir / f"client_{client_index:03d}.pt"
+                torch.save(prepared, save_path)
+
+            logger.info(
+                "Accepted feature payload from %s (%s/%s collected, size=%s bytes)",
+                client_id,
+                len(self.feature_payloads),
+                self.cfg.num_clients,
+                len(payload_bytes),
+            )
+
+            if len(self.feature_payloads) >= self.cfg.num_clients and not self._tail_training_started:
+                self.phase = "server_training"
+                self._tail_training_started = True
+                start_tail_thread = True
+
+        if start_tail_thread:
+            threading.Thread(target=self._train_tail_with_features, daemon=True).start()
+
+        return True
+
+    def _sanitize_feature_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for key in [
+            "train_features",
+            "train_labels",
+            "test_features",
+            "test_labels",
+            "metadata",
+        ]:
+            if key not in payload:
+                continue
+            value = payload[key]
+            if isinstance(value, torch.Tensor):
+                result[key] = value.detach().cpu()
+            else:
+                result[key] = value
+        return result
+
+    def _finalize_wandb_run(self):
+        if not self.use_wandb:
+            return
+        with self.lock:
+            if self._wandb is None or self.wandb_run is None or self._wandb_finalized:
+                return
+            wandb_module = self._wandb
+            wandb_run = self.wandb_run
+            self._wandb_finalized = True
+            self.wandb_run = None
+            self._wandb = None
+        try:
+            # quiet=True 避免额外进度条，exit_code=0 标明正常退出
+            if wandb_run is not None:
+                wandb_run.finish(exit_code=0, quiet=True)
+            elif wandb_module is not None:
+                wandb_module.finish(exit_code=0, quiet=True)
+        except Exception as exc:
+            logger.warning("Failed to finalize WandB run cleanly: %s", exc)
+
+    def _train_tail_with_features(self):
+        logger.info("All client features received. Aggregating for tail training.")
+        with self.lock:
+            payloads = list(self.feature_payloads.values())
+            tail_kwargs = dict(self.tail_config_kwargs)
+            include_test = bool(self.feature_config.get("include_test_split", True))
+            run_dir = self.run_dir
+            use_wandb = self.use_wandb and self._wandb is not None
+
+        train_features_list = []
+        train_labels_list = []
+        test_features_list = []
+        test_labels_list = []
+
+        for payload in payloads:
+            tf = payload.get("train_features")
+            tl = payload.get("train_labels")
+            if tf is None or tl is None:
+                continue
+            train_features_list.append(tf)
+            train_labels_list.append(tl)
+
+            if include_test:
+                test_f = payload.get("test_features")
+                test_l = payload.get("test_labels")
+                if test_f is not None and test_l is not None and test_f.numel() > 0:
+                    test_features_list.append(test_f)
+                    test_labels_list.append(test_l)
+
+        if not train_features_list:
+            logger.error("No valid training features collected; skipping tail training")
+            with self.lock:
+                self.phase = "finalize"
+            self._finalize_wandb_run()
+            return
+
+        train_features = torch.cat(train_features_list, dim=0)
+        train_labels = torch.cat(train_labels_list, dim=0)
+
+        test_features = torch.cat(test_features_list, dim=0) if test_features_list else None
+        test_labels = torch.cat(test_labels_list, dim=0) if test_labels_list else None
+
+        feature_dim = train_features.view(train_features.size(0), -1).size(1)
+        tail_config = TailTrainConfig(
+            feature_dim=feature_dim,
+            num_classes=self.cfg.num_classes,
+            **tail_kwargs,
+        )
+
+        wandb_epoch_hook: Optional[Callable[[int, Dict[str, float]], None]] = None
+        if use_wandb and self._wandb is not None:
+            wandb_ref = self._wandb
+            total_rounds = self.cfg.total_rounds
+
+            def _log_tail_epoch(epoch_idx: int, metrics: Dict[str, float]) -> None:
+                step_val = total_rounds + epoch_idx
+                payload = {f"Tail/{k}": v for k, v in metrics.items()}
+                payload["Tail/epoch"] = epoch_idx
+                payload["Global/step"] = step_val
+                try:
+                    wandb_ref.log(payload, step=step_val)
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("Failed to log tail epoch metrics to WandB: %s", exc)
+
+            wandb_epoch_hook = _log_tail_epoch
+
+        try:
+            result = train_tail_classifier(
+                train_features=train_features,
+                train_labels=train_labels,
+                test_features=test_features,
+                test_labels=test_labels,
+                config=tail_config,
+                epoch_log_hook=wandb_epoch_hook,
+            )
+        except Exception:
+            logger.exception("Tail training failed")
+            with self.lock:
+                self.phase = "finalize"
+            self._finalize_wandb_run()
+            return
+
+        metrics = result.get("metrics", {})
+        model_state = result.get("state_dict")
+
+        if run_dir is not None:
+            tail_dir = run_dir / "tail"
+            tail_dir.mkdir(exist_ok=True)
+            if model_state is not None:
+                torch.save(model_state, tail_dir / "tail_classifier.pt")
+            with open(tail_dir / "metrics.json", "w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+        if use_wandb:
+            tail_epochs = max(tail_config.epochs, 0)
+            if tail_epochs == 0:
+                final_step = self.cfg.total_rounds
+                log_payload = {f"Tail/{k}": v for k, v in metrics.items()}
+                log_payload["Tail/epoch"] = 0
+                log_payload["Global/step"] = final_step
+                self._wandb.log(log_payload, step=final_step)
+
+        with self.lock:
+            self.tail_metrics = metrics
+            self.phase = "finalize"
+            if self.use_wandb and self._wandb is not None and self.wandb_run is not None:
+                for key, value in metrics.items():
+                    self.wandb_run.summary[f"tail_{key}"] = value
+
+        logger.info("Tail training complete. Metrics: %s", metrics)
+        self._finalize_wandb_run()
+
     @staticmethod
     def _fedavg_aggregation(weighted_params_list: List[Tuple[OrderedDict, float]]) -> Optional[OrderedDict]:
         if not weighted_params_list:
@@ -510,9 +862,6 @@ class Aggregator:
                         self.wandb_run.summary[key] = value
 
                 self._wandb.log({"Global/step": round_number, "Global/final_round": round_number}, step=round_number)
-                self._wandb.finish()
-                self.wandb_run = None
-                self._wandb = None
             return
 
         logger.info("Persisting final FedEXT artifacts to %s", self.run_dir)
@@ -585,6 +934,3 @@ class Aggregator:
                     self.wandb_run.summary[key] = value
 
             self._wandb.log({"Global/step": round_number, "Global/final_round": round_number}, step=round_number)
-            self._wandb.finish()
-            self.wandb_run = None
-            self._wandb = None

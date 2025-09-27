@@ -88,11 +88,23 @@ def build_server_cmd(args, run_dir: str):
         "--encoder_ratio", str(args.encoder_ratio),
         "--algorithm", args.algorithm,
         "--run_dir", run_dir,
+        "--feature_batch_size", str(args.feature_batch_size),
+        "--tail_batch_size", str(args.tail_batch_size),
+        "--tail_epochs", str(args.tail_epochs),
+        "--tail_lr", str(args.tail_lr),
+        "--tail_momentum", str(args.tail_momentum),
+        "--tail_weight_decay", str(args.tail_weight_decay),
     ]
     if args.device:
         cmd += ["--device", args.device]
     if args.num_workers is not None:
         cmd += ["--num_workers", str(args.num_workers)]
+    if args.feature_keep_spatial:
+        cmd.append("--feature_keep_spatial")
+    if args.feature_no_test_split:
+        cmd.append("--feature_no_test_split")
+    if args.tail_device:
+        cmd += ["--tail_device", args.tail_device]
     if args.use_wandb:
         cmd.append("--use_wandb")
         if args.wandb_project:
@@ -119,6 +131,7 @@ def build_client_cmd(args, idx: int):
         "--feature_dim", str(args.feature_dim),
         "--encoder_ratio", str(args.encoder_ratio),
         "--algorithm", args.algorithm,
+        "--max_message_mb", str(args.max_message_mb),
     ]
     if args.client_device:
         cmd += ["--device", args.client_device]
@@ -152,6 +165,15 @@ def parse_args():
     p.add_argument("--device", type=str, default=None, help="Server device override, e.g., cuda or cpu")
     p.add_argument("--client_device", type=str, default=None, help="Client device override, e.g., cpu to save GPU")
     p.add_argument("--num_workers", type=int, default=None, help="DataLoader workers for both server/client (if applicable)")
+    p.add_argument("--feature_batch_size", type=int, default=128)
+    p.add_argument("--feature_keep_spatial", action="store_true")
+    p.add_argument("--feature_no_test_split", action="store_true")
+    p.add_argument("--tail_batch_size", type=int, default=64)
+    p.add_argument("--tail_epochs", type=int, default=20)
+    p.add_argument("--tail_lr", type=float, default=0.01)
+    p.add_argument("--tail_momentum", type=float, default=0.9)
+    p.add_argument("--tail_weight_decay", type=float, default=1e-4)
+    p.add_argument("--tail_device", type=str, default=None)
 
     # Multi-GPU distribution
     p.add_argument("--gpus", type=str, default="0,1,2,3",

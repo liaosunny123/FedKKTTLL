@@ -215,6 +215,7 @@ def main():
     parser.add_argument("--tail_momentum", type=float, default=0.9, help="Momentum for tail classifier optimizer")
     parser.add_argument("--tail_weight_decay", type=float, default=1e-4, help="Weight decay for tail classifier optimizer")
     parser.add_argument("--tail_device", type=str, default=None, help="Device for tail classifier training (default: follow --device)")
+    parser.add_argument("--tail_model_name", type=str, default=None, help="Model name used for server-side tail reconstruction (default: follow --model_name)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -255,6 +256,7 @@ def main():
     cfg.tail_momentum = args.tail_momentum
     cfg.tail_weight_decay = args.tail_weight_decay
     cfg.tail_device = args.tail_device
+    cfg.tail_model_name = args.tail_model_name
 
     service = FederatedService(
         cfg,
@@ -356,6 +358,8 @@ def main():
 
                     if service.aggregator.tail_metrics:
                         logger.info(f"Tail metrics     : {service.aggregator.tail_metrics}")
+                    if getattr(service.aggregator, "tail_classifier_info", None):
+                        logger.info(f"Tail classifier info: {service.aggregator.tail_classifier_info}")
 
                     printed_done = True
                     should_exit = True

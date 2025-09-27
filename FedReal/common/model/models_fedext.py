@@ -1,3 +1,5 @@
+from typing import Optional
+
 import math
 import torch
 import torch.nn.functional as F
@@ -11,35 +13,64 @@ class BaseHeadSplit(nn.Module):
     def __init__(self, cid, model_name, feature_dim, num_classes):
         super().__init__()
 
-        if model_name == "resnet18":
-            self.base = torchvision.models.resnet18(pretrained=False)
-        else:
-            raise ValueError(f"Unsupported model: {model_name}")
-        
-        
-        head = None # you may need more code for pre-existing heterogeneous heads
-        if hasattr(self.base, 'heads'):
-            head = self.base.heads
-            self.base.heads = nn.AdaptiveAvgPool1d(feature_dim)
-        elif hasattr(self.base, 'head'):
-            head = self.base.head
-            self.base.head = nn.AdaptiveAvgPool1d(feature_dim)
-        elif hasattr(self.base, 'fc'):
-            head = self.base.fc
-            self.base.fc = nn.AdaptiveAvgPool1d(feature_dim)
-        elif hasattr(self.base, 'classifier'):
-            head = self.base.classifier
-            self.base.classifier = nn.AdaptiveAvgPool1d(feature_dim)
-        else:
-            raise('The base model does not have a classification head.')
+        self.feature_dim = feature_dim
 
-        
-        self.head = nn.Linear(feature_dim, num_classes)
+        self.base = self._instantiate_backbone(model_name, num_classes)
+        self.head = self._extract_head(num_classes)
         
     def forward(self, x):
         out = self.base(x)
         out = self.head(out)
         return out
+
+    def _instantiate_backbone(self, model_spec: str, num_classes: int) -> nn.Module:
+        if isinstance(model_spec, str) and "(" in model_spec:
+            context = {
+                "torch": torch,
+                "torchvision": torchvision,
+                "nn": nn,
+                "num_classes": num_classes,
+            }
+            try:
+                backbone = eval(model_spec, context, {})
+            except Exception as exc:
+                raise ValueError(f"Failed to evaluate model spec '{model_spec}': {exc}") from exc
+            if not isinstance(backbone, nn.Module):
+                raise ValueError("Model spec did not return a torch.nn.Module instance")
+            return backbone
+
+        constructor = getattr(torchvision.models, model_spec, None)
+        if constructor is None:
+            raise ValueError(f"Unsupported model: {model_spec}")
+        try:
+            return constructor(weights=None)
+        except TypeError:
+            return constructor(pretrained=False)
+
+    def _extract_head(self, num_classes: int) -> nn.Module:
+        head_module: Optional[nn.Module] = None
+
+        if hasattr(self.base, 'heads'):
+            head_module = self.base.heads
+            self.base.heads = nn.Identity()
+        elif hasattr(self.base, 'head'):
+            head_module = self.base.head
+            self.base.head = nn.Identity()
+        elif hasattr(self.base, 'fc'):
+            head_module = self.base.fc
+            self.base.fc = nn.Identity()
+        elif hasattr(self.base, 'classifier'):
+            head_module = self.base.classifier
+            self.base.classifier = nn.Identity()
+
+        in_features = self.feature_dim
+        if isinstance(head_module, nn.Linear):
+            in_features = head_module.in_features
+        elif hasattr(head_module, "in_features"):
+            in_features = getattr(head_module, "in_features")
+
+        self.feature_dim = in_features
+        return nn.Linear(in_features, num_classes)
 
 
 class FedEXTModel(BaseHeadSplit):

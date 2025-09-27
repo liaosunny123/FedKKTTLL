@@ -69,10 +69,21 @@ def build_feature_payload(
     if include_test and test_loader is not None:
         test_features, test_labels = _extract_features(model, test_loader, device, keep_spatial)
 
+    meta = dict(metadata)
+    if train_features.numel() > 0:
+        meta["train_feature_shape"] = list(train_features.shape[1:]) if train_features.dim() > 1 else []
+    else:
+        meta["train_feature_shape"] = []
+
+    if include_test and test_features.numel() > 0:
+        meta["test_feature_shape"] = list(test_features.shape[1:]) if test_features.dim() > 1 else []
+    else:
+        meta["test_feature_shape"] = []
+
     payload = {
         "train_features": train_features,
         "train_labels": train_labels,
-        "metadata": metadata,
+        "metadata": meta,
     }
 
     if include_test:
@@ -287,6 +298,10 @@ def main():
                     "keep_spatial": keep_spatial,
                     "include_test": include_test,
                     "encoder_ratio": args.encoder_ratio,
+                    "model_name": cfg.model_name,
+                    "feature_dim": args.feature_dim,
+                    "layer_split_index": getattr(model, "layer_split_index", None),
+                    "total_layers": len(getattr(model, "layers_list", []) or []),
                 }
 
                 payload_bytes = build_feature_payload(

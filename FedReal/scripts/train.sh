@@ -9,11 +9,11 @@ REPO_ROOT="$(cd "${PROJECT_ROOT}/.." && pwd)"
 # ==========================
 # (1) 联邦训练配置
 # ==========================
-ALGORITHM="FedAvg"      # 可选：FedEXT / FedAvg
+ALGORITHM="FedEXT"      # 可选：FedEXT / FedAvg
 DATASET="Cifar10"
 NUM_CLASSES=10
 NUM_CLIENTS=20
-ROUNDS=30
+ROUNDS=2
 LOCAL_EPOCHS=1
 BATCH_SIZE=10
 LR=0.005
@@ -59,6 +59,7 @@ TAIL_LR=0.01
 TAIL_MOMENTUM=0.9
 TAIL_WEIGHT_DECAY=1e-4
 TAIL_DEVICE="cuda"
+TAIL_MODEL_NAME="resnet34"
 
 # ==========================
 # WandB 控制
@@ -137,6 +138,7 @@ LAUNCH_CMD=(python scripts/launch.py
   --tail_lr "${TAIL_LR}"
   --tail_momentum "${TAIL_MOMENTUM}"
   --tail_weight_decay "${TAIL_WEIGHT_DECAY}"
+  --tail_model_name "${TAIL_MODEL_NAME}"
 )
 
 if [[ "${USE_WANDB}" == "1" ]]; then

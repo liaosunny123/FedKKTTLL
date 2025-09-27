@@ -1,3 +1,4 @@
+import copy
 import logging
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Callable
@@ -5,6 +6,8 @@ from typing import Dict, Optional, Tuple, Callable
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
+
+from common.model.models_fedext import FedEXTModel
 
 
 logger = logging.getLogger("Server").getChild("TailTrainer")
@@ -22,23 +25,108 @@ class TailTrainConfig:
     device: str = "cpu"
 
 
-class LinearTail(nn.Module):
-    def __init__(self, feature_dim: int, num_classes: int):
+class _TailLocalModule(nn.Module):
+    def __init__(self, local_layers, model_type: str):
         super().__init__()
-        self.classifier = nn.Linear(feature_dim, num_classes)
+        self.layer_names = [name for name, _ in local_layers]
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for _, layer in local_layers])
+        self.model_type = model_type
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(x)
+        if self.layer_names:
+            first = self.layer_names[0]
+            if ("fc" in first or "head" in first) and x.ndim > 2:
+                x = torch.flatten(x, 1)
+        for name, layer in zip(self.layer_names, self.layers):
+            if "avgpool" in name and self.model_type == "resnet":
+                x = layer(x)
+                x = torch.flatten(x, 1)
+            elif "fc" in name and x.ndim > 2:
+                x = layer(torch.flatten(x, 1))
+            else:
+                x = layer(x)
+        return x
+
+
+def build_full_tail_classifier(
+    fed_model: FedEXTModel,
+    train_feature_shape: Tuple[int, ...],
+    dataset_is_flat: bool,
+    num_classes: int,
+    original_feature_shape: Optional[Tuple[int, ...]] = None,
+    force_linear_projection: bool = False,
+) -> Tuple[nn.Module, Dict[str, object]]:
+    local_layers = fed_model.local_layers or []
+    info: Dict[str, object] = {
+        "tail_type": None,
+        "layer_names": [name for name, _ in local_layers],
+        "model_type": fed_model.model_type,
+        "input_shape": list(train_feature_shape),
+        "original_feature_shape": list(original_feature_shape) if original_feature_shape else None,
+    }
+
+    if not local_layers:
+        input_dim = int(train_feature_shape[0]) if len(train_feature_shape) == 1 else fed_model.head.in_features
+        classifier = nn.Linear(input_dim, num_classes)
+        info["tail_type"] = "linear_only"
+        info["flatten_input"] = True
+        return classifier, info
+
+    first_local_name = local_layers[0][0]
+    expects_linear = ("head" in first_local_name) or ("fc" in first_local_name)
+    tail_requires_spatial = not expects_linear
+
+    if tail_requires_spatial and dataset_is_flat:
+        if not force_linear_projection:
+            logger.warning(
+                "Tail expects spatial features but received flattened tensors; falling back to linear classifier."
+            )
+            input_dim = int(train_feature_shape[0]) if len(train_feature_shape) == 1 else fed_model.head.in_features
+            classifier = nn.Linear(input_dim, num_classes)
+            info["tail_type"] = "linear_fallback"
+            info["flatten_input"] = True
+            return classifier, info
+        if original_feature_shape:
+            info["reshape_dims"] = list(original_feature_shape)
+        else:
+            raise ValueError("Cannot reconstruct spatial features for tail training; missing original shape.")
+
+    classifier = _TailLocalModule(local_layers, fed_model.model_type)
+    info["tail_type"] = "local_layers"
+    if expects_linear and len(train_feature_shape) > 1:
+        info["flatten_input"] = True
+    if tail_requires_spatial and train_feature_shape:
+        info["reshape_dims"] = info.get("reshape_dims") or list(train_feature_shape)
+    return classifier, info
+
+
+def prepare_features_for_classifier(
+    features: torch.Tensor,
+    info: Dict[str, object],
+    device: torch.device,
+) -> torch.Tensor:
+    feats = features.to(torch.float32)
+    reshape_dims = info.get("reshape_dims")
+    if reshape_dims and feats.ndim == 2:
+        feats = feats.view(feats.size(0), *reshape_dims)
+    if info.get("flatten_input") and feats.ndim > 2:
+        feats = feats.view(feats.size(0), -1)
+    return feats.to(device)
 
 
 @torch.no_grad()
-def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[float, float]:
+def _evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    classifier_info: Dict[str, object],
+) -> Tuple[float, float]:
     total = 0
     correct = 0
     loss_sum = 0.0
     criterion = nn.CrossEntropyLoss()
     for batch_x, batch_y in loader:
-        batch_x = batch_x.to(device)
+        batch_x = prepare_features_for_classifier(batch_x, classifier_info, device)
         batch_y = batch_y.to(device)
         logits = model(batch_x)
         loss = criterion(logits, batch_y)
@@ -56,6 +144,8 @@ def train_tail_classifier(
     train_labels: torch.Tensor,
     test_features: Optional[torch.Tensor],
     test_labels: Optional[torch.Tensor],
+    classifier: nn.Module,
+    classifier_info: Dict[str, object],
     config: TailTrainConfig,
     epoch_log_hook: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Dict[str, object]:
@@ -63,23 +153,18 @@ def train_tail_classifier(
         raise ValueError("Empty training features received by tail trainer")
 
     device = torch.device(config.device)
+    classifier = classifier.to(device)
 
-    train_x = train_features.view(train_features.size(0), -1).to(torch.float32)
-    train_y = train_labels.to(torch.long)
-
-    dataset = TensorDataset(train_x, train_y)
-    loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
+    train_dataset = TensorDataset(train_features, train_labels.to(torch.long))
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
 
     test_loader: Optional[DataLoader] = None
     if test_features is not None and test_labels is not None and test_features.numel() > 0:
-        test_x = test_features.view(test_features.size(0), -1).to(torch.float32)
-        test_y = test_labels.to(torch.long)
-        test_dataset = TensorDataset(test_x, test_y)
+        test_dataset = TensorDataset(test_features, test_labels.to(torch.long))
         test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
-    model = LinearTail(config.feature_dim, config.num_classes).to(device)
     optimizer = torch.optim.SGD(
-        model.parameters(),
+        classifier.parameters(),
         lr=config.lr,
         momentum=config.momentum,
         weight_decay=config.weight_decay,
@@ -87,35 +172,36 @@ def train_tail_classifier(
     criterion = nn.CrossEntropyLoss()
 
     logger.info(
-        "Tail training — samples=%s, feature_dim=%s, epochs=%s, batch_size=%s",
-        train_x.size(0),
-        config.feature_dim,
+        "Tail training — samples=%s, feature_shape=%s, epochs=%s, batch_size=%s",
+        train_features.shape[0],
+        list(train_features.shape[1:]),
         config.epochs,
         config.batch_size,
     )
 
-    model.train()
+    classifier.train()
     for epoch in range(config.epochs):
         epoch_loss = 0.0
         epoch_total = 0
         correct = 0
-        for batch_x, batch_y in loader:
-            batch_x = batch_x.to(device)
-            batch_y = batch_y.to(device)
+        for batch_x, batch_y in train_loader:
+            inputs = prepare_features_for_classifier(batch_x, classifier_info, device)
+            labels = batch_y.to(device)
+
             optimizer.zero_grad()
-            logits = model(batch_x)
-            loss = criterion(logits, batch_y)
+            logits = classifier(inputs)
+            loss = criterion(logits, labels)
             loss.backward()
             optimizer.step()
 
-            epoch_loss += loss.item() * batch_y.size(0)
-            epoch_total += batch_y.size(0)
+            epoch_loss += loss.item() * labels.size(0)
+            epoch_total += labels.size(0)
             predicted = torch.argmax(logits, dim=1)
-            correct += (predicted == batch_y).sum().item()
+            correct += (predicted == labels).sum().item()
 
         if epoch_total > 0:
             epoch_loss_avg = epoch_loss / epoch_total
-            epoch_acc = correct / epoch_total if epoch_total > 0 else 0.0
+            epoch_acc = correct / epoch_total
             epoch_metrics: Dict[str, float] = {
                 "train_loss": epoch_loss_avg,
                 "train_acc": epoch_acc,
@@ -128,12 +214,13 @@ def train_tail_classifier(
             ]
 
             if test_loader is not None:
-                test_loss_epoch, test_acc_epoch = _evaluate(model, test_loader, device)
+                classifier.eval()
+                test_loss_epoch, test_acc_epoch = _evaluate(classifier, test_loader, device, classifier_info)
                 epoch_metrics["test_loss"] = test_loss_epoch
                 epoch_metrics["test_acc"] = test_acc_epoch
                 log_parts.append(f"test_loss={test_loss_epoch:.4f}")
                 log_parts.append(f"test_acc={test_acc_epoch:.4f}")
-                model.train()
+                classifier.train()
 
             logger.info(" — ".join(log_parts))
 
@@ -143,12 +230,12 @@ def train_tail_classifier(
                 except Exception as exc:  # pragma: no cover
                     logger.warning("Tail epoch logging hook failed: %s", exc)
 
-    model.eval()
-    train_loss, train_acc = _evaluate(model, loader, device)
+    classifier.eval()
+    train_loss, train_acc = _evaluate(classifier, train_loader, device, classifier_info)
 
     eval_results: Optional[Tuple[float, float]] = None
     if test_loader is not None:
-        eval_results = _evaluate(model, test_loader, device)
+        eval_results = _evaluate(classifier, test_loader, device, classifier_info)
 
     metrics = {
         "train_loss": train_loss,
@@ -158,6 +245,7 @@ def train_tail_classifier(
         metrics["test_loss"], metrics["test_acc"] = eval_results
 
     return {
-        "state_dict": model.state_dict(),
+        "state_dict": classifier.cpu().state_dict(),
         "metrics": metrics,
+        "classifier_info": classifier_info,
     }

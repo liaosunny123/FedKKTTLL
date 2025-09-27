@@ -105,6 +105,8 @@ def build_server_cmd(args, run_dir: str):
         cmd.append("--feature_no_test_split")
     if args.tail_device:
         cmd += ["--tail_device", args.tail_device]
+    if args.tail_model_name:
+        cmd += ["--tail_model_name", args.tail_model_name]
     if args.use_wandb:
         cmd.append("--use_wandb")
         if args.wandb_project:
@@ -174,6 +176,8 @@ def parse_args():
     p.add_argument("--tail_momentum", type=float, default=0.9)
     p.add_argument("--tail_weight_decay", type=float, default=1e-4)
     p.add_argument("--tail_device", type=str, default=None)
+    p.add_argument("--tail_model_name", type=str, default=None,
+                   help="Model name for server-side tail reconstruction")
 
     # Multi-GPU distribution
     p.add_argument("--gpus", type=str, default="0,1,2,3",

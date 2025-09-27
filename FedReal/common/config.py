@@ -30,6 +30,7 @@ class FedConfig:
     tail_momentum: float = 0.9
     tail_weight_decay: float = 1e-4
     tail_device: Optional[str] = None
+    tail_model_name: Optional[str] = None
 
     def to_dict(self):
         return self.__dict__.copy()

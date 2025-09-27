@@ -16,7 +16,7 @@ from common.serialization import bytes_to_state_dict, state_dict_to_bytes
 from common.utils import select_clients
 
 from .eval import evaluate
-from .tail_trainer import TailTrainConfig, train_tail_classifier
+from .tail_trainer import TailTrainConfig, build_full_tail_classifier, train_tail_classifier
 
 
 logger = logging.getLogger("Server").getChild("Aggregator")
@@ -77,6 +77,7 @@ class Aggregator:
         self.server_eval_acc: List[float] = []
         self.server_eval_loss: List[float] = []
         self.round_client_metrics: Dict[int, List[Dict[str, Optional[float]]]] = defaultdict(list)
+        self.tail_classifier_info: Optional[Dict[str, Any]] = None
         self._finalized_clients: Set[str] = set()
 
         # —— Model buffers ——
@@ -150,13 +151,15 @@ class Aggregator:
     # ------------------------------------------------------------------
     # Helper construction utilities
     # ------------------------------------------------------------------
-    def _new_model_instance(self) -> FedEXTModel:
+    def _new_model_instance(self, model_name: Optional[str] = None, encoder_ratio: Optional[float] = None) -> FedEXTModel:
+        chosen_model = model_name or self.cfg.model_name
+        ratio = encoder_ratio if encoder_ratio is not None else self.encoder_ratio
         model = FedEXTModel(
             cid=-1,
-            model_name=self.cfg.model_name,
+            model_name=chosen_model,
             feature_dim=self.cfg.feature_dim,
             num_classes=self.cfg.num_classes,
-            encoder_ratio=self.encoder_ratio,
+            encoder_ratio=ratio,
         ).to(self.device)
         # Ensure split is applied in case constructor was bypassed
         if hasattr(model, "set_layer_split") and hasattr(model, "layer_split_index"):
@@ -713,15 +716,81 @@ class Aggregator:
             self._finalize_wandb_run()
             return
 
-        train_features = torch.cat(train_features_list, dim=0)
-        train_labels = torch.cat(train_labels_list, dim=0)
+        train_features = torch.cat(train_features_list, dim=0).contiguous().to(torch.float32)
+        train_labels = torch.cat(train_labels_list, dim=0).to(torch.long)
 
-        test_features = torch.cat(test_features_list, dim=0) if test_features_list else None
-        test_labels = torch.cat(test_labels_list, dim=0) if test_labels_list else None
+        test_features = (
+            torch.cat(test_features_list, dim=0).contiguous().to(torch.float32)
+            if test_features_list
+            else None
+        )
+        test_labels = torch.cat(test_labels_list, dim=0).to(torch.long) if test_labels_list else None
 
-        feature_dim = train_features.view(train_features.size(0), -1).size(1)
+        dataset_is_flat = train_features.dim() <= 2
+        train_feature_shape = tuple(train_features.shape[1:]) if train_features.dim() > 1 else ()
+        original_feature_shape = None
+        layer_split_index_meta: Optional[int] = None
+        total_layers_meta: Optional[int] = None
+        for payload in payloads:
+            meta = payload.get("metadata") or {}
+            shape = meta.get("train_feature_shape")
+            if shape and original_feature_shape is None:
+                original_feature_shape = tuple(shape)
+            if layer_split_index_meta is None:
+                layer_split_index_meta = meta.get("layer_split_index")
+            if total_layers_meta is None:
+                total_layers_meta = meta.get("total_layers")
+            if (
+                original_feature_shape is not None
+                and layer_split_index_meta is not None
+                and total_layers_meta is not None
+            ):
+                break
+        if original_feature_shape is None and not dataset_is_flat and train_feature_shape:
+            original_feature_shape = train_feature_shape
+
+        tail_model_name = getattr(self.cfg, "tail_model_name", None) or self.cfg.model_name
+        split_ratio = None
+        if layer_split_index_meta is not None and total_layers_meta:
+            split_ratio = layer_split_index_meta / max(1, total_layers_meta)
+        elif getattr(self.cfg, "encoder_ratio", None) is not None:
+            split_ratio = self.cfg.encoder_ratio
+        else:
+            split_ratio = self.encoder_ratio
+
+        eval_group = 0 if 0 in self.group_model_states else next(iter(self.group_model_states.keys()))
+        eval_state = self.group_model_states[eval_group]
+        base_model = self._new_model_instance(model_name=tail_model_name)
+        try:
+            base_model.load_state_dict(eval_state, strict=False)
+        except Exception:
+            logger.debug("Tail model state_dict load non-strict for %s", tail_model_name)
+
+        if split_ratio is not None:
+            total_tail_layers = len(getattr(base_model, "layers_list", []) or [])
+            if total_tail_layers > 1:
+                new_index = int(round(split_ratio * total_tail_layers))
+                new_index = max(1, min(new_index, total_tail_layers - 1))
+                base_model.set_layer_split(new_index)
+
+        try:
+            classifier, classifier_info = build_full_tail_classifier(
+                fed_model=base_model,
+                train_feature_shape=train_feature_shape,
+                dataset_is_flat=dataset_is_flat,
+                num_classes=self.cfg.num_classes,
+                original_feature_shape=original_feature_shape,
+                force_linear_projection=False,
+            )
+        except ValueError as exc:
+            logger.exception("Tail classifier construction failed: %s", exc)
+            with self.lock:
+                self.phase = "finalize"
+            self._finalize_wandb_run()
+            return
+
         tail_config = TailTrainConfig(
-            feature_dim=feature_dim,
+            feature_dim=train_features.view(train_features.size(0), -1).size(1),
             num_classes=self.cfg.num_classes,
             **tail_kwargs,
         )
@@ -749,6 +818,8 @@ class Aggregator:
                 train_labels=train_labels,
                 test_features=test_features,
                 test_labels=test_labels,
+                classifier=classifier,
+                classifier_info=classifier_info,
                 config=tail_config,
                 epoch_log_hook=wandb_epoch_hook,
             )
@@ -761,6 +832,10 @@ class Aggregator:
 
         metrics = result.get("metrics", {})
         model_state = result.get("state_dict")
+        classifier_info_result = result.get("classifier_info", classifier_info)
+        logger.info("Tail classifier summary: %s", classifier_info_result.get("tail_type"))
+        if classifier_info_result.get("tail_type") == "linear_fallback":
+            logger.warning("Tail training used linear fallback; enable feature_keep_spatial for full tail training.")
 
         if run_dir is not None:
             tail_dir = run_dir / "tail"
@@ -768,7 +843,7 @@ class Aggregator:
             if model_state is not None:
                 torch.save(model_state, tail_dir / "tail_classifier.pt")
             with open(tail_dir / "metrics.json", "w", encoding="utf-8") as f:
-                json.dump(metrics, f, indent=2, ensure_ascii=False)
+                json.dump({"metrics": metrics, "classifier_info": classifier_info_result}, f, indent=2, ensure_ascii=False)
 
         if use_wandb:
             tail_epochs = max(tail_config.epochs, 0)
@@ -781,6 +856,7 @@ class Aggregator:
 
         with self.lock:
             self.tail_metrics = metrics
+            self.tail_classifier_info = classifier_info_result
             self.phase = "finalize"
             if self.use_wandb and self._wandb is not None and self.wandb_run is not None:
                 for key, value in metrics.items():

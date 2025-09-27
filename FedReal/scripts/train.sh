@@ -9,11 +9,11 @@ REPO_ROOT="$(cd "${PROJECT_ROOT}/.." && pwd)"
 # ==========================
 # (1) 联邦训练配置
 # ==========================
-ALGORITHM="FedEXT"      # 可选：FedEXT / FedAvg
+ALGORITHM="FedAvg"      # 可选：FedEXT / FedAvg
 DATASET="Cifar10"
 NUM_CLASSES=10
 NUM_CLIENTS=20
-ROUNDS=3
+ROUNDS=30
 LOCAL_EPOCHS=1
 BATCH_SIZE=10
 LR=0.005
